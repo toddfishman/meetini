@@ -1,0 +1,245 @@
+// This is your Prisma schema file
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id                String       @id @default(cuid())
+  email             String       @unique
+  name              String?
+  phoneNumber       String?
+  notifyByEmail     Boolean      @default(true)
+  notifyBySms       Boolean      @default(false)
+  currentChallenge  String?      // For WebAuthn
+  credentials       Credential[] // For WebAuthn
+  calendarAccounts  CalendarAccount[]
+  manualEvents      ManualEvent[]
+  calendarPreferences CalendarPreferences?
+  groups            Group[]
+  contacts          Contact[]
+  sentInvitations   Invitation[] @relation("SentInvitations")
+  receivedInvitations Invitation[] @relation("ReceivedInvitations")
+  location          Location?
+  locationPreferences LocationPreference[]
+  reminderSettings  ReminderSetting[]
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+  image             String?
+  emailVerified     DateTime?
+}
+
+model Invitation {
+  id            String       @id @default(cuid())
+  title         String
+  status        String       @default("pending") // pending, accepted, declined, cancelled
+  type          String       // sent, received
+  participants  Participant[]
+  createdAt     DateTime     @default(now())
+  proposedTimes DateTime[]
+  location      String?
+  creator       User         @relation("SentInvitations", fields: [createdBy], references: [email])
+  createdBy     String
+  recipients    User[]       @relation("ReceivedInvitations")
+  preferences   Preferences?
+  responses     Response[]
+  recurrence    Recurrence?
+  reminders     Reminder[]
+  series        Series?      @relation(fields: [seriesId], references: [id])
+  seriesId      String?
+}
+
+model Series {
+  id            String       @id @default(cuid())
+  title         String
+  createdBy     String
+  recurrence    Recurrence  @relation(fields: [recurrenceId], references: [id])
+  recurrenceId  String      @unique
+  startDate     DateTime
+  endDate       DateTime?
+  invitations   Invitation[]
+  createdAt     DateTime     @default(now())
+}
+
+model Recurrence {
+  id            String     @id @default(cuid())
+  invitation    Invitation @relation(fields: [invitationId], references: [id], onDelete: Cascade)
+  invitationId  String     @unique
+  frequency     String     // daily, weekly, monthly, yearly
+  interval      Int        @default(1) // every X days/weeks/months/years
+  daysOfWeek    Int[]      // 0-6 for Sunday-Saturday
+  endDate       DateTime?
+  count         Int?       // number of occurrences
+  series        Series?
+}
+
+model Participant {
+  id            String     @id @default(cuid())
+  email         String
+  phoneNumber   String?
+  name          String?
+  invitation    Invitation @relation(fields: [invitationId], references: [id], onDelete: Cascade)
+  invitationId  String
+  status        String     @default("pending") // pending, accepted, declined
+  notifyByEmail Boolean    @default(true)
+  notifyBySms   Boolean    @default(false)
+}
+
+model Response {
+  id            String     @id @default(cuid())
+  invitation    Invitation @relation(fields: [invitationId], references: [id], onDelete: Cascade)
+  invitationId  String
+  participantEmail String
+  availableTimes DateTime[]
+  preferences   Json?      // For storing any additional preferences
+  createdAt     DateTime   @default(now())
+}
+
+model Preferences {
+  id            String     @id @default(cuid())
+  invitation    Invitation @relation(fields: [invitationId], references: [id], onDelete: Cascade)
+  invitationId  String     @unique
+  timePreference String?   // morning, afternoon, evening
+  durationType  String?    // 30min, 1hour, 2hours
+  locationType  String?    // coffee, restaurant, office, virtual
+  locationPreferences LocationPreference[]
+}
+
+model Location {
+  id            String     @id @default(cuid())
+  user          User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId        String     @unique
+  latitude      Float
+  longitude     Float
+  address       String?
+  city          String?
+  country       String?
+  updatedAt     DateTime   @default(now())
+}
+
+model LocationPreference {
+  id            String     @id @default(cuid())
+  user          User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId        String
+  preferences   Preferences? @relation(fields: [preferencesId], references: [id])
+  preferencesId String?
+  maxDistance   Int        @default(5000) // meters
+  priceRange    Int[]      // 1-4 for $-$$$$
+  minRating     Float      @default(4.0)
+  cuisineTypes  String[]   // For restaurants
+  amenities     String[]   // For cafes/restaurants
+  accessibility Boolean    @default(false)
+  parking       Boolean    @default(false)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+}
+
+model ReminderSetting {
+  id            String     @id @default(cuid())
+  user          User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId        String
+  type          String     // invitation, response_needed, upcoming_meeting
+  timing        Int[]      // minutes before event
+  enabled       Boolean    @default(true)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+}
+
+model Reminder {
+  id            String     @id @default(cuid())
+  invitation    Invitation @relation(fields: [invitationId], references: [id], onDelete: Cascade)
+  invitationId  String
+  type          String     // invitation, response_needed, upcoming_meeting
+  scheduledFor  DateTime
+  sent          Boolean    @default(false)
+  sentAt        DateTime?
+  createdAt     DateTime   @default(now())
+}
+
+model Credential {
+  id              String   @id @default(cuid())
+  userId          String
+  credentialID    String   @unique // Base64 encoded credential ID
+  publicKey       String   // Base64 encoded public key
+  counter         Int      // Sign count
+  transports      String?  // JSON string of available transports
+  createdAt       DateTime @default(now())
+  lastUsed        DateTime @updatedAt
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model CalendarAccount {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider      String   // 'google', 'outlook', 'apple'
+  accountId     String   // External account identifier
+  accessToken   String
+  refreshToken  String?
+  expiresAt     DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([userId, provider])
+  @@index([userId])
+}
+
+model CalendarPreferences {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workDays      Int[]    // 0-6, where 0 is Sunday
+  workingHours  Json?    // { start: "HH:mm", end: "HH:mm" }
+  timezone      String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model ManualEvent {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title       String
+  start       DateTime
+  end         DateTime
+  location    String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId])
+  @@index([start, end])
+}
+
+model Group {
+  id          String    @id @default(cuid())
+  name        String
+  description String?
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contacts    Contact[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([userId])
+}
+
+model Contact {
+  id          String    @id @default(cuid())
+  type        String    // 'email' or 'phone'
+  value       String
+  name        String?
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  groups      Group[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([userId])
+  @@unique([userId, type, value])
+} 
