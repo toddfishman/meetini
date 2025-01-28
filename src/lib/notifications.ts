@@ -2,7 +2,14 @@ import { Resend } from 'resend';
 import twilio from 'twilio';
 import { formatInTimeZone } from 'date-fns-tz';
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+let resend: Resend | null = null;
+try {
+  if (process.env.RESEND_API_KEY) {
+    resend = new Resend(process.env.RESEND_API_KEY);
+  }
+} catch (error) {
+  console.warn('Failed to initialize Resend:', error);
+}
 
 // Initialize Twilio client only if credentials are available
 const twilioClient = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN
@@ -54,6 +61,11 @@ async function sendEmail(
   recipient: NotificationRecipient,
   data: NotificationData
 ): Promise<void> {
+  if (!resend) {
+    console.warn('Email notifications are disabled: Resend API key not configured');
+    return;
+  }
+  
   try {
     if (!recipient.email) throw new Error('Email address is required');
 
@@ -238,5 +250,23 @@ function generateSMSTemplate(
       return `${greeting}${data.title}${
         data.description ? `\n${data.description}` : ''
       }`;
+  }
+}
+
+export async function sendEmailNotification(to: string, subject: string, content: string) {
+  if (!resend) {
+    console.warn('Email notifications are disabled: Resend API key not configured');
+    return;
+  }
+  
+  try {
+    await resend.emails.send({
+      from: 'Meetini <notifications@meetini.app>',
+      to,
+      subject,
+      html: content,
+    });
+  } catch (error) {
+    console.error('Failed to send email notification:', error);
   }
 } 

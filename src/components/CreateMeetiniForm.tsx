@@ -33,12 +33,6 @@ interface FormData {
   };
 }
 
-interface SelectedContact {
-  type: 'email' | 'phone';
-  value: string;
-  name?: string;
-}
-
 export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialPrompt }: CreateMeetiniFormProps) {
   const [creationMode, setCreationMode] = useState<'ai' | 'manual' | null>(initialPrompt ? 'ai' : null);
   const [aiPrompt, setAiPrompt] = useState(initialPrompt || '');
@@ -53,7 +47,6 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
       locationType: undefined,
     }
   });
-  const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [processingStatus, setProcessingStatus] = useState<string | null>(null);
   const [newContact, setNewContact] = useState('');
@@ -74,9 +67,8 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
 
   const handleAISubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
-    setIsSubmitting(true);
     setProcessingStatus('Analyzing your request...');
+    setIsSubmitting(true);
 
     try {
       const response = await fetch('/api/meetini/ai-create', {
@@ -101,7 +93,7 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
       onSuccess();
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'An unexpected error occurred');
+      console.error(err);
     } finally {
       setIsSubmitting(false);
       setProcessingStatus(null);
@@ -110,9 +102,8 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
 
   const handleManualSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
-    setIsSubmitting(true);
     setProcessingStatus('Finding optimal times...');
+    setIsSubmitting(true);
 
     try {
       // Validate form
@@ -151,7 +142,7 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
       onSuccess();
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'An unexpected error occurred');
+      console.error(err);
     } finally {
       setIsSubmitting(false);
       setProcessingStatus(null);
@@ -191,9 +182,6 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
         contacts: [...prev.contacts, contact]
       }));
       setNewContact('');
-      setError(null);
-    } else {
-      setError('Please enter a valid email or phone number');
     }
   };
 
@@ -207,7 +195,6 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
   const handleSelectContacts = async () => {
     try {
       setIsSelectingContacts(true);
-      setError(null);
       
       const selectedContacts = await selectContacts();
       const validContacts = selectedContacts
@@ -235,7 +222,7 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
         contacts: [...prev.contacts, ...validContacts]
       }));
     } catch (err) {
-      setError('Failed to select contacts. Please try again or enter them manually.');
+      console.error(err);
     } finally {
       setIsSelectingContacts(false);
     }
@@ -253,12 +240,6 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
         <div className="relative bg-gray-900 rounded-lg p-6 max-w-2xl w-full border border-gray-800">
           <h2 className="text-xl font-semibold mb-6 text-teal-500">Create New Meetini</h2>
           
-          {error && (
-            <div className="mb-4 p-3 bg-red-500/10 border border-red-500 rounded text-red-500">
-              {error}
-            </div>
-          )}
-
           {!creationMode ? (
             <div className="space-y-4">
               <p className="text-gray-300 mb-6">Choose how you'd like to create your Meetini:</p>

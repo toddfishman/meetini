@@ -80,30 +80,6 @@ export default function GroupManager() {
     }
   };
 
-  const handleUpdateGroup = async (groupId: string, updates: Partial<Group>) => {
-    try {
-      setError(null);
-
-      const res = await fetch(`/api/groups/${groupId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates),
-      });
-
-      if (!res.ok) {
-        throw new Error('Failed to update group');
-      }
-
-      const updatedGroup = await res.json();
-      setGroups(groups.map(group => 
-        group.id === groupId ? updatedGroup : group
-      ));
-      setSelectedGroup(updatedGroup);
-    } catch (err) {
-      setError('Failed to update group. Please try again.');
-    }
-  };
-
   const handleDeleteGroup = async (groupId: string) => {
     try {
       setError(null);

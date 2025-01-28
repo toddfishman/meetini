@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useSession } from 'next-auth/react';
+import Image from 'next/image';
 
 interface CalendarAccount {
   id: string;
@@ -147,10 +148,11 @@ export default function CalendarSettings() {
             return (
               <div key={provider} className="flex items-center justify-between p-3 bg-gray-800 rounded">
                 <div className="flex items-center gap-3">
-                  <img
+                  <Image
                     src={`/icons/${provider}.svg`}
                     alt={`${provider} calendar`}
-                    className="w-6 h-6"
+                    width={24}
+                    height={24}
                   />
                   <span className="capitalize">{provider} Calendar</span>
                 </div>
