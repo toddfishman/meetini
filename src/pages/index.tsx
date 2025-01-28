@@ -290,7 +290,7 @@ export default function Home() {
               ) : session ? (
                 'Invite People to Meet Using Your Voice'
               ) : (
-                'Get Started'
+                'Send Your Meetini'
               )}
             </button>
 
@@ -327,8 +327,10 @@ export default function Home() {
         </div>
 
         {/* Footer */}
-        <div className="mt-4 text-gray-400 text-sm">
-          <a href="#" className="hover:text-white">Privacy Policy</a>
+        <div className="mt-8 text-gray-400 text-sm flex items-center justify-center space-x-4">
+          <a href="#" className="hover:text-white transition-colors">Privacy Policy</a>
+          <span className="text-gray-600">•</span>
+          <a href="mailto:support@meetini.app" className="hover:text-white transition-colors">Contact Us</a>
         </div>
       </div>
     </div>
