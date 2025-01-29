@@ -27,21 +27,41 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (req.method === 'POST') {
     try {
-      const { title, contacts, location, preferences } = req.body;
+      console.log('POST request received:', req.body);
+      const { title, contacts, location, preferences, proposedTimes } = req.body;
+
+      // Log the parsed data
+      console.log('Parsed request data:', {
+        title,
+        contacts,
+        location,
+        preferences,
+        proposedTimes
+      });
 
       // Validate required fields
       if (!title) {
+        console.log('Validation failed: Title is required');
         return res.status(400).json({ error: 'Title is required' });
       }
       if (!contacts) {
+        console.log('Validation failed: Contacts are required');
         return res.status(400).json({ error: 'Contacts are required' });
       }
       if (!Array.isArray(contacts)) {
+        console.log('Validation failed: Contacts must be an array');
         return res.status(400).json({ error: 'Contacts must be an array' });
       }
       if (contacts.length === 0) {
+        console.log('Validation failed: At least one contact is required');
         return res.status(400).json({ error: 'At least one contact is required' });
       }
+      if (!proposedTimes || !Array.isArray(proposedTimes) || proposedTimes.length === 0) {
+        console.log('Validation failed: At least one proposed time is required');
+        return res.status(400).json({ error: 'At least one proposed time is required' });
+      }
+
+      console.log('All validations passed');
 
       // Validate each contact
       for (const contact of contacts) {
@@ -57,6 +77,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       // Create the invitation
+      console.log('Creating invitation in database...');
       const invitation = await prisma.invitation.create({
         data: {
           title,
@@ -64,6 +85,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           type: 'sent',
           createdBy: session.user.email,
           location,
+          proposedTimes,
           participants: {
             create: contacts.map(contact => ({
               email: contact.type === 'email' ? contact.value : null,
@@ -87,28 +109,45 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
       });
 
+      console.log('Invitation created:', invitation);
+
       // Send notifications to participants
+      console.log('Sending notifications to participants...');
       await sendNotifications(
         invitation.participants.map((p: Participant) => ({
-          email: p.email,
-          phoneNumber: p.phoneNumber,
-          name: p.name
+          email: p.email || undefined,
+          phoneNumber: p.phoneNumber || undefined,
+          name: p.name || undefined,
+          notifyByEmail: p.notifyByEmail,
+          notifyBySms: p.notifyBySms
         })),
         {
           invitationId: invitation.id,
           title: invitation.title,
           creatorName: session.user.name || session.user.email,
           creatorEmail: session.user.email,
-          proposedTimes: invitation.proposedTimes,
-          location: invitation.location,
+          proposedTimes: invitation.proposedTimes.map(time => time.toISOString()),
+          location: invitation.location || undefined,
           type: 'invitation'
         }
       );
 
+      console.log('Notifications sent successfully');
       return res.status(200).json(invitation);
     } catch (error) {
       console.error('Failed to create invitation:', error);
-      return res.status(500).json({ error: 'Failed to create invitation' });
+      // Log the full error details
+      if (error instanceof Error) {
+        console.error('Error details:', {
+          message: error.message,
+          stack: error.stack,
+          name: error.name
+        });
+      }
+      return res.status(500).json({ 
+        error: 'Failed to create invitation',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      });
     }
   }
 
@@ -193,17 +232,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (otherParticipants.length > 0) {
         await sendNotifications(
           otherParticipants.map((p: Participant) => ({
-            email: p.email,
-            phoneNumber: p.phoneNumber,
-            name: p.name
+            email: p.email || undefined,
+            phoneNumber: p.phoneNumber || undefined,
+            name: p.name || undefined,
+            notifyByEmail: p.notifyByEmail,
+            notifyBySms: p.notifyBySms
           })),
           {
             invitationId: invitation.id,
             title: invitation.title,
             creatorName: session.user.name || session.user.email,
             creatorEmail: session.user.email,
-            proposedTimes: invitation.proposedTimes,
-            location: invitation.location,
+            proposedTimes: invitation.proposedTimes.map(time => time.toISOString()),
+            location: invitation.location || undefined,
             type: 'update'
           }
         );

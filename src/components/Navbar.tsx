@@ -71,6 +71,12 @@ export default function Navbar() {
 
             {session ? (
               <div className="flex items-center space-x-4">
+                <Link
+                  href="/settings"
+                  className="text-white hover:text-gray-300 transition-colors font-medium"
+                >
+                  Settings
+                </Link>
                 <button
                   onClick={() => setShowFaceIDSetup(true)}
                   className="text-white hover:text-gray-300 transition-colors font-medium"

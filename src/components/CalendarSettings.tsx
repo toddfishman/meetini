@@ -70,7 +70,7 @@ export default function CalendarSettings() {
       // Implement OAuth flow for each provider
       switch (provider) {
         case 'google':
-          window.location.href = '/api/auth/google?scope=https://www.googleapis.com/auth/calendar.readonly';
+          window.location.href = '/api/auth/google?scope=https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar';
           break;
         case 'outlook':
           window.location.href = '/api/auth/outlook?scope=Calendars.Read';

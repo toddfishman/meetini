@@ -26,6 +26,7 @@ interface FormData {
   title: string;
   contacts: Contact[];
   location: string;
+  proposedTimes: string[];
   preferences?: {
     timePreference?: 'morning' | 'afternoon' | 'evening';
     durationType?: '30min' | '1hour' | '2hours' | 'custom';
@@ -41,6 +42,7 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
     title: '',
     contacts: [],
     location: '',
+    proposedTimes: [],
     preferences: {
       timePreference: undefined,
       durationType: undefined,
@@ -102,19 +104,37 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
 
   const handleManualSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    console.log('Form submission started');
+    console.log('Form data:', formData);
     setProcessingStatus('Finding optimal times...');
     setIsSubmitting(true);
 
     try {
       // Validate form
-      if (!formData.title.trim()) throw new Error('Title is required');
-      if (!formData.contacts.length) throw new Error('At least one participant is required');
+      if (!formData.title.trim()) {
+        console.log('Title validation failed');
+        throw new Error('Title is required');
+      }
+      if (!formData.contacts.length) {
+        console.log('Contacts validation failed');
+        throw new Error('At least one participant is required');
+      }
+      if (!formData.proposedTimes.length) {
+        console.log('Proposed times validation failed');
+        throw new Error('At least one proposed time is required');
+      }
 
-      // Format data
-      const contacts = formData.contacts.map(contact => ({
-        ...contact,
-        value: contact.value.trim()
-      }));
+      console.log('Validation passed, preparing to send request');
+
+      const requestBody = {
+        title: formData.title.trim(),
+        contacts: formData.contacts,
+        location: formData.location.trim(),
+        preferences: formData.preferences,
+        proposedTimes: formData.proposedTimes
+      };
+
+      console.log('Sending request with body:', requestBody);
 
       // Submit to API
       const response = await fetch('/api/meetini', {
@@ -122,15 +142,16 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          title: formData.title.trim(),
-          contacts,
-          location: formData.location.trim(),
-          preferences: formData.preferences
-        }),
+        body: JSON.stringify(requestBody),
+      });
+
+      console.log('Response received:', {
+        status: response.status,
+        statusText: response.statusText
       });
 
       const data = await response.json();
+      console.log('Response data:', data);
 
       if (!response.ok) {
         if (data.code === 'NOT_AUTHENTICATED') {
@@ -139,13 +160,17 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
         throw new Error(data.error || 'Failed to create invitation');
       }
 
+      console.log('Submission successful');
       onSuccess();
       onClose();
     } catch (err) {
-      console.error(err);
+      console.error('Submission error:', err);
+      const errorMessage = err instanceof Error ? err.message : 'An error occurred';
+      console.log('Setting error message:', errorMessage);
+      setProcessingStatus(errorMessage);
     } finally {
       setIsSubmitting(false);
-      setProcessingStatus(null);
+      setTimeout(() => setProcessingStatus(null), 3000);
     }
   };
 
@@ -455,6 +480,69 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
                   />
                 </div>
               )}
+
+              {/* Time Selection Section */}
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-1">
+                  Proposed Times
+                </label>
+                <div className="space-y-2">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs text-gray-400 mb-1">Date</label>
+                      <input
+                        type="date"
+                        className="w-full p-2 rounded bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-teal-500"
+                        min={new Date().toISOString().split('T')[0]}
+                        onChange={e => {
+                          const date = e.target.value;
+                          setFormData(prev => ({
+                            ...prev,
+                            proposedTimes: [date]
+                          }));
+                        }}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-400 mb-1">Time</label>
+                      <input
+                        type="time"
+                        className="w-full p-2 rounded bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-teal-500"
+                        onChange={e => {
+                          const time = e.target.value;
+                          const date = formData.proposedTimes?.[0];
+                          if (date) {
+                            const dateTime = `${date}T${time}`;
+                            setFormData(prev => ({
+                              ...prev,
+                              proposedTimes: [dateTime]
+                            }));
+                          }
+                        }}
+                      />
+                    </div>
+                  </div>
+                  {formData.proposedTimes?.map((time, index) => (
+                    <div key={index} className="flex items-center justify-between p-2 rounded bg-gray-800 border border-gray-700">
+                      <span className="text-gray-300">
+                        {new Date(time).toLocaleString()}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFormData(prev => ({
+                            ...prev,
+                            proposedTimes: prev.proposedTimes?.filter((_, i) => i !== index)
+                          }));
+                        }}
+                        className="text-gray-400 hover:text-red-500 transition-colors"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
 
               {processingStatus && (
                 <div className="p-3 bg-teal-500/10 border border-teal-500 rounded text-teal-500">

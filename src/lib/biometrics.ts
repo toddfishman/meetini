@@ -1,8 +1,6 @@
 import { startAuthentication, startRegistration } from '@simplewebauthn/browser';
 import type { 
   PublicKeyCredentialRequestOptionsJSON,
-  AuthenticationResponseJSON,
-  RegistrationResponseJSON
 } from '@simplewebauthn/typescript-types';
 
 export async function registerBiometrics(): Promise<boolean> {
