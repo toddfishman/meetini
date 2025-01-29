@@ -34,26 +34,9 @@ export default function Navbar() {
 
   const handleLogin = async () => {
     setIsAuthenticating(true);
-
     try {
-      if (isBiometricsAvailable()) {
-        try {
-          const result = await handleBiometricAuth();
-          if (result.verified) {
-            await signIn('google', { callbackUrl: '/dashboard' });
-          } else {
-            throw new Error('Face ID verification failed');
-          }
-        } catch (biometricError) {
-          console.warn('Biometric authentication failed:', biometricError);
-          showToast('error', 'Face ID authentication failed. Falling back to regular sign in.');
-          // Fall back to regular sign in
-          await signIn('google', { callbackUrl: '/dashboard' });
-        }
-      } else {
-        // Regular sign in
-        await signIn('google', { callbackUrl: '/dashboard' });
-      }
+      // Directly use Google sign in without Face ID check
+      await signIn('google', { callbackUrl: '/dashboard' });
     } catch (err) {
       showToast('error', err instanceof Error ? err.message : 'Failed to sign in. Please try again.');
     } finally {
