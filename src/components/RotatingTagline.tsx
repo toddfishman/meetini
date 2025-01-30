@@ -63,7 +63,7 @@ export default function RotatingTagline() {
     <div className="text-center transition-opacity duration-500 ease-in-out"
          style={{ opacity: isVisible ? 1 : 0 }}>
       <h1 className="text-2xl font-bold mb-2">
-        "{taglines[currentIndex].title}"
+        &quot;{taglines[currentIndex].title}&quot;
       </h1>
       <p className="text-gray-400">
         {taglines[currentIndex].description}

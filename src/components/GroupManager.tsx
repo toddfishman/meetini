@@ -45,7 +45,7 @@ export default function GroupManager() {
 
       const data = await res.json();
       setGroups(data);
-    } catch (err) {
+    } catch {
       setError('Failed to load groups. Please try again.');
     } finally {
       setIsLoading(false);
@@ -75,7 +75,7 @@ export default function GroupManager() {
       setGroups([...groups, createdGroup]);
       setIsCreating(false);
       setNewGroup({ name: '', description: '' });
-    } catch (err) {
+    } catch {
       setError('Failed to create group. Please try again.');
     }
   };
@@ -96,32 +96,8 @@ export default function GroupManager() {
       if (selectedGroup?.id === groupId) {
         setSelectedGroup(null);
       }
-    } catch (err) {
+    } catch {
       setError('Failed to delete group. Please try again.');
-    }
-  };
-
-  const handleAddContact = async (groupId: string, contact: Contact) => {
-    try {
-      setError(null);
-
-      const res = await fetch(`/api/groups/${groupId}/contacts`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(contact),
-      });
-
-      if (!res.ok) {
-        throw new Error('Failed to add contact');
-      }
-
-      const updatedGroup = await res.json();
-      setGroups(groups.map(group => 
-        group.id === groupId ? updatedGroup : group
-      ));
-      setSelectedGroup(updatedGroup);
-    } catch (err) {
-      setError('Failed to add contact. Please try again.');
     }
   };
 
@@ -142,7 +118,7 @@ export default function GroupManager() {
         group.id === groupId ? updatedGroup : group
       ));
       setSelectedGroup(updatedGroup);
-    } catch (err) {
+    } catch {
       setError('Failed to remove contact. Please try again.');
     }
   };

@@ -76,7 +76,7 @@ export default function FaceIDSetup({ isOpen, onClose, onSuccess }: FaceIDSetupP
 
               {status === 'registering' && (
                 <div className="text-center">
-                  <p className="text-gray-500">Follow your device's prompts to set up Face ID...</p>
+                  <p className="text-gray-500">Follow your device&apos;s prompts to set up Face ID...</p>
                   <div className="mt-4 animate-spin rounded-full h-8 w-8 border-b-2 border-teal-500 mx-auto" />
                 </div>
               )}

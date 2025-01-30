@@ -1,9 +1,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
-import Image from 'next/image';
 import { useSession, signIn, signOut } from 'next-auth/react';
 import { useRouter } from 'next/router';
-import { handleBiometricAuth, isBiometricsAvailable } from '@/lib/biometrics';
 import FaceIDSetup from './FaceIDSetup';
 import Toast, { ToastType } from './Toast';
 
@@ -27,7 +25,7 @@ export default function Navbar() {
       await signOut({ redirect: false });
       router.push('/');
       showToast('success', 'Successfully signed out');
-    } catch (err) {
+    } catch (error) {
       showToast('error', 'Failed to sign out. Please try again.');
     }
   };
@@ -50,13 +48,10 @@ export default function Navbar() {
         <div className="flex justify-between items-center h-24 py-2">
           <div className="flex items-center">
             <Link href="/" className="flex items-center">
-              <Image
+              <img
                 src="/logos/beta-logo.png"
                 alt="Meetini Logo"
-                width={200}
-                height={200}
-                className="w-auto h-auto"
-                priority
+                className="w-auto h-[50px]"
               />
             </Link>
           </div>

@@ -1,6 +1,6 @@
-import { google } from 'googleapis';
 import { DateTime } from 'luxon';
 import { prisma } from '@/lib/prisma';
+import { PrismaClient } from '@prisma/client';
 
 export type CalendarProvider = 'google' | 'outlook' | 'apple' | 'manual';
 
@@ -26,6 +26,26 @@ interface CalendarPreferences {
   timezone?: string;
 }
 
+type UserWithCalendarAccounts = Awaited<ReturnType<PrismaClient['user']['findUnique']>> & {
+  calendarAccounts: NonNullable<Awaited<ReturnType<PrismaClient['calendarAccount']['findMany']>>>
+};
+
+type ManualEventType = NonNullable<Awaited<ReturnType<PrismaClient['manualEvent']['findUnique']>>>;
+
+interface GoogleCalendarEvent {
+  id: string;
+  summary: string;
+  start: {
+    dateTime: string | null;
+    date: string | null;
+  };
+  end: {
+    dateTime: string | null;
+    date: string | null;
+  };
+  location: string | null | undefined;
+}
+
 export async function getCalendarEvents(
   userId: string,
   provider: CalendarProvider,
@@ -35,7 +55,7 @@ export async function getCalendarEvents(
   const user = await prisma.user.findUnique({
     where: { id: userId },
     include: { calendarAccounts: true }
-  });
+  }) as UserWithCalendarAccounts | null;
 
   if (!user) throw new Error('User not found');
 
@@ -92,9 +112,11 @@ export async function findAvailableSlots(
       );
 
       if (isAvailable) {
+        const startISO = current.toISO() || current.toUTC().toString();
+        const endISO = slotEnd.toISO() || slotEnd.toUTC().toString();
         slots.push({
-          start: current.toISO(),
-          end: slotEnd.toISO()
+          start: startISO,
+          end: endISO
         });
       }
     }
@@ -131,60 +153,86 @@ function isWorkDay(
 
 // Provider-specific implementations
 async function getGoogleCalendarEvents(
-  user: any,
+  user: UserWithCalendarAccounts,
   startDate: string,
   endDate: string
 ): Promise<CalendarEvent[]> {
   const googleAccount = user.calendarAccounts.find(
-    (account: any) => account.provider === 'google'
+    (account: NonNullable<Awaited<ReturnType<PrismaClient['calendarAccount']['findFirst']>>>) => 
+      account.provider === 'google'
   );
   
   if (!googleAccount?.accessToken) {
     throw new Error('Google Calendar not connected');
   }
 
-  const auth = new google.auth.OAuth2();
-  auth.setCredentials({ access_token: googleAccount.accessToken });
-  
-  const calendar = google.calendar({ version: 'v3', auth });
-  
-  const response = await calendar.events.list({
-    calendarId: 'primary',
-    timeMin: startDate,
-    timeMax: endDate,
-    singleEvents: true,
-    orderBy: 'startTime',
-  });
+  const response = await fetch(
+    `https://www.googleapis.com/calendar/v3/calendars/primary/events?` +
+    new URLSearchParams({
+      timeMin: startDate,
+      timeMax: endDate,
+      singleEvents: 'true',
+      orderBy: 'startTime'
+    }).toString(),
+    {
+      headers: {
+        'Authorization': `Bearer ${googleAccount.accessToken}`,
+        'Accept': 'application/json',
+      }
+    }
+  );
 
-  return (response.data.items || []).map((event: any) => ({
+  if (!response.ok) {
+    throw new Error(`Google Calendar API error: ${response.status}`);
+  }
+
+  const data = await response.json();
+  
+  return (data.items || []).map((event: GoogleCalendarEvent) => ({
     id: event.id,
     title: event.summary,
-    start: event.start.dateTime || event.start.date,
-    end: event.end.dateTime || event.end.date,
+    start: event.start.dateTime || event.start.date || startDate,
+    end: event.end.dateTime || event.end.date || endDate,
     location: event.location,
   }));
 }
 
 async function getOutlookCalendarEvents(
-  user: any,
-  startDate: string,
-  endDate: string
+  _user: UserWithCalendarAccounts,
+  _startDate: string,
+  _endDate: string
 ): Promise<CalendarEvent[]> {
   // Implement Outlook calendar integration
   return [];
 }
 
 async function getAppleCalendarEvents(
-  user: any,
-  startDate: string,
-  endDate: string
+  _user: UserWithCalendarAccounts,
+  _startDate: string,
+  _endDate: string
 ): Promise<CalendarEvent[]> {
   // Implement Apple calendar integration
   return [];
 }
 
+export async function getManualEvents(userId: string): Promise<CalendarEvent[]> {
+  const manualEvents = await prisma.manualEvent.findMany({
+    where: {
+      userId
+    }
+  });
+
+  return manualEvents.map((event: ManualEventType) => ({
+    id: event.id,
+    title: event.title,
+    start: event.start.toISOString(),
+    end: event.end.toISOString(),
+    location: event.location || undefined
+  }));
+}
+
 async function getManualCalendarEvents(
-  user: any,
+  user: UserWithCalendarAccounts,
   startDate: string,
   endDate: string
 ): Promise<CalendarEvent[]> {
@@ -198,11 +246,11 @@ async function getManualCalendarEvents(
     },
   });
 
-  return manualEvents.map(event => ({
+  return manualEvents.map((event: ManualEventType) => ({
     id: event.id,
     title: event.title,
     start: event.start.toISOString(),
     end: event.end.toISOString(),
-    location: event.location || undefined,
+    location: event.location || undefined
   }));
 } 

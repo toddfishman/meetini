@@ -1,6 +1,6 @@
 import { prisma } from '@/lib/prisma';
 import { sendNotifications } from '@/lib/notifications';
-import { addMinutes, isBefore } from 'date-fns';
+import { addMinutes } from 'date-fns';
 import type { Prisma } from '@prisma/client';
 
 interface ReminderJob {
@@ -110,18 +110,24 @@ export async function processReminders(): Promise<void> {
 
         // Prepare notification data
         const notificationData = {
-          type: reminder.type === 'upcoming_meeting' ? 'reminder' : reminder.type,
+          type: reminder.type === 'upcoming_meeting' ? 'reminder' : 'update',
           title: invitation.title,
           description: getReminderDescription(reminder.type),
           date: invitation.proposedTimes[0]?.toISOString(),
-          location: invitation.location,
+          location: invitation.location || undefined,
           actionUrl: `${process.env.NEXTAUTH_URL}/invitations/${invitation.id}`,
-        };
+        } as const;
 
-        // Get recipients based on reminder type
-        const recipients = reminder.type === 'response_needed'
+        // Get recipients based on reminder type and map to NotificationRecipient format
+        const recipients = (reminder.type === 'response_needed'
           ? invitation.participants.filter(p => p.status === 'pending')
-          : invitation.participants;
+          : invitation.participants).map(p => ({
+            email: p.email,
+            phoneNumber: p.phoneNumber || undefined,
+            name: p.name || undefined,
+            notifyByEmail: p.notifyByEmail,
+            notifyBySms: p.notifyBySms
+          }));
 
         // Send notifications
         await sendNotifications(recipients, notificationData);
@@ -159,9 +165,7 @@ export async function cleanupReminders(): Promise<void> {
     const pastInvitations = await prisma.invitation.findMany({
       where: {
         proposedTimes: {
-          every: {
-            lt: now,
-          },
+          lte: now,
         },
       },
       select: { id: true },

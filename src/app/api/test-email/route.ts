@@ -23,16 +23,18 @@ export async function POST() {
 
     // Attempt to send email with custom domain
     const data = await resend.emails.send({
-      from: 'Meetini <notifications@meetini.ai>',
+      from: 'Meetini <notifications@meetini.app>',
       to: session.user.email,
       subject: 'Test Email from Meetini',
       html: `
-        <div>
-          <h1>Test Email</h1>
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+          <h1 style="color: #14b8a6;">Test Email from Meetini</h1>
           <p>This is a test email from your Meetini application.</p>
-          <p>If you're receiving this, your email configuration is working correctly!</p>
-          <p>Sent to: ${session.user.email}</p>
-          <p>Time: ${new Date().toISOString()}</p>
+          <p style="color: #10b981;">If you're receiving this, your email configuration is working correctly!</p>
+          <p><strong>Sent to:</strong> ${session.user.email}</p>
+          <p><strong>Time:</strong> ${new Date().toLocaleString()}</p>
+          <hr style="border: 1px solid #e5e7eb; margin: 20px 0;" />
+          <p style="color: #6b7280; font-size: 14px;">This is an automated test email. No action is required.</p>
         </div>
       `,
       tags: [{ name: 'test_email', value: 'true' }]

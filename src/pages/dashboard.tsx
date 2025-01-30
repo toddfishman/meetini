@@ -8,15 +8,10 @@ import CreateMeetiniForm from '../components/CreateMeetiniForm';
 
 interface CalendarEvent {
   id: string;
-  summary: string;
-  start: {
-    dateTime: string;
-    date?: string;
-  };
-  end: {
-    dateTime: string;
-    date?: string;
-  };
+  title: string;
+  start: string;
+  end: string;
+  location?: string;
 }
 
 interface MeetiniInvite {
@@ -95,8 +90,18 @@ export default function Dashboard() {
     if (session) {
       fetchEvents();
       fetchInvites();
+      
+      // Check for pending invitation after login
+      const pendingInvitation = localStorage.getItem('pendingInvitation');
+      const isNewInvitation = router.query.newInvitation === 'true';
+      
+      if (pendingInvitation && isNewInvitation) {
+        localStorage.removeItem('pendingInvitation');
+        setInitialPrompt(pendingInvitation);
+        setIsCreateModalOpen(true);
+      }
     }
-  }, [session, fetchInvites]);
+  }, [session, router.query.newInvitation]);
 
   useEffect(() => {
     // Check for prompt in URL when component mounts
@@ -128,15 +133,15 @@ export default function Dashboard() {
   };
 
   // Group events by month
-  const groupedEvents = events.reduce((groups: { [key: string]: CalendarEvent[] }, event) => {
-    const date = new Date(event.start.dateTime || event.start.date || Date.now());
-    const monthYear = date.toLocaleString('default', { month: 'long', year: 'numeric' });
-    if (!groups[monthYear]) {
-      groups[monthYear] = [];
+  const eventsByMonth = events.reduce((acc, event) => {
+    const date = new Date(event.start);
+    const monthKey = `${date.getFullYear()}-${date.getMonth() + 1}`;
+    if (!acc[monthKey]) {
+      acc[monthKey] = [];
     }
-    groups[monthYear].push(event);
-    return groups;
-  }, {});
+    acc[monthKey].push(event);
+    return acc;
+  }, {} as Record<string, CalendarEvent[]>);
 
   const filteredInvites = meetiniInvites.filter(invite => invite.type === activeTab);
 
@@ -209,6 +214,12 @@ export default function Dashboard() {
         }
       }
     });
+  };
+
+  // Format month key for display
+  const formatMonthKey = (monthKey: string) => {
+    const [year, month] = monthKey.split('-').map(Number);
+    return new Date(year, month - 1).toLocaleString('default', { month: 'long', year: 'numeric' });
   };
 
   return (
@@ -345,25 +356,28 @@ export default function Dashboard() {
             <p>Loading events...</p>
           ) : events.length > 0 ? (
             <div className="space-y-4">
-              {Object.entries(groupedEvents).map(([monthYear, monthEvents]) => (
-                <div key={monthYear} className="border border-gray-800 rounded-lg overflow-hidden">
+              {Object.entries(eventsByMonth).map(([monthKey, monthEvents]) => (
+                <div key={monthKey} className="border border-gray-800 rounded-lg overflow-hidden">
                   <button
-                    className="w-full p-4 bg-gray-900 text-left font-medium text-teal-500 hover:bg-gray-800 transition-colors flex justify-between items-center"
-                    onClick={() => toggleEvent(monthYear)}
+                    onClick={() => toggleEvent(monthKey)}
+                    className="w-full p-4 text-left bg-gray-900 hover:bg-gray-800 transition-colors flex justify-between items-center"
                   >
-                    <span>{monthYear}</span>
+                    <span className="font-medium">{formatMonthKey(monthKey)}</span>
                     <span className="text-sm text-gray-400">
                       {monthEvents.length} event{monthEvents.length !== 1 ? 's' : ''}
                     </span>
                   </button>
-                  {expandedEvents.includes(monthYear) && (
+                  {expandedEvents.includes(monthKey) && (
                     <div className="divide-y divide-gray-800">
                       {monthEvents.map((event) => (
                         <div key={event.id} className="p-4 hover:bg-gray-900 transition-colors">
-                          <h3 className="font-medium text-teal-500">{event.summary}</h3>
+                          <h3 className="font-medium text-teal-500">{event.title}</h3>
                           <p className="text-sm text-gray-400">
-                            {new Date(event.start.dateTime || event.start.date || Date.now()).toLocaleString()}
+                            {new Date(event.start).toLocaleString()}
                           </p>
+                          {event.location && (
+                            <p className="text-sm text-gray-500">{event.location}</p>
+                          )}
                         </div>
                       ))}
                     </div>

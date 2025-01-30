@@ -19,11 +19,16 @@ export const authOptions: AuthOptions = {
       clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
       authorization: {
         params: {
-          prompt: "select_account",
-          access_type: "offline",
-          response_type: "code",
-          scope: "openid email profile https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar"
-        }
+          scope: [
+            'https://www.googleapis.com/auth/userinfo.email',
+            'https://www.googleapis.com/auth/userinfo.profile',
+            'https://www.googleapis.com/auth/calendar',
+            'https://www.googleapis.com/auth/contacts.readonly',
+          ].join(' '),
+          access_type: 'offline',
+          response_type: 'code',
+          prompt: 'consent',
+        },
       }
     }),
   ],
@@ -32,11 +37,15 @@ export const authOptions: AuthOptions = {
     async jwt({ token, account }) {
       if (account) {
         token.accessToken = account.access_token;
+        token.refreshToken = account.refresh_token;
+        token.expiresAt = account.expires_at;
       }
       return token;
     },
     async session({ session, token }) {
-      session.accessToken = token.accessToken as string;
+      session.accessToken = token.accessToken;
+      session.refreshToken = token.refreshToken;
+      session.expiresAt = token.expiresAt;
       return session;
     },
   },
@@ -44,7 +53,10 @@ export const authOptions: AuthOptions = {
   pages: {
     signIn: '/',
     error: '/',
-  }
+  },
+  session: {
+    strategy: 'jwt',
+  },
 };
 
 export default NextAuth(authOptions); 

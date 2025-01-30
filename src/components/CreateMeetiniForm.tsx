@@ -38,6 +38,7 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
   const [creationMode, setCreationMode] = useState<'ai' | 'manual' | null>(initialPrompt ? 'ai' : null);
   const [aiPrompt, setAiPrompt] = useState(initialPrompt || '');
   const [isListening, setIsListening] = useState(false);
+  const [isContactPickerAvailable, setIsContactPickerAvailable] = useState(false);
   const [formData, setFormData] = useState<FormData>({
     title: '',
     contacts: [],
@@ -52,7 +53,6 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [processingStatus, setProcessingStatus] = useState<string | null>(null);
   const [newContact, setNewContact] = useState('');
-  const [isContactPickerAvailable, setIsContactPickerAvailable] = useState(false);
   const [isSelectingContacts, setIsSelectingContacts] = useState(false);
 
   // Add effect to handle initialPrompt changes
@@ -64,7 +64,11 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
   }, [initialPrompt]);
 
   useEffect(() => {
-    setIsContactPickerAvailable(isContactPickerSupported());
+    // Check for contact picker support only on the client side
+    if (typeof window !== 'undefined') {
+      const supported = isContactPickerSupported();
+      setIsContactPickerAvailable(supported);
+    }
   }, []);
 
   const handleAISubmit = async (e: React.FormEvent) => {
@@ -106,25 +110,20 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
     e.preventDefault();
     console.log('Form submission started');
     console.log('Form data:', formData);
-    setProcessingStatus('Finding optimal times...');
+    setProcessingStatus(null); // Clear any previous status
     setIsSubmitting(true);
 
     try {
       // Validate form
       if (!formData.title.trim()) {
-        console.log('Title validation failed');
         throw new Error('Title is required');
       }
       if (!formData.contacts.length) {
-        console.log('Contacts validation failed');
         throw new Error('At least one participant is required');
       }
       if (!formData.proposedTimes.length) {
-        console.log('Proposed times validation failed');
         throw new Error('At least one proposed time is required');
       }
-
-      console.log('Validation passed, preparing to send request');
 
       const requestBody = {
         title: formData.title.trim(),
@@ -133,8 +132,6 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
         preferences: formData.preferences,
         proposedTimes: formData.proposedTimes
       };
-
-      console.log('Sending request with body:', requestBody);
 
       // Submit to API
       const response = await fetch('/api/meetini', {
@@ -145,13 +142,7 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
         body: JSON.stringify(requestBody),
       });
 
-      console.log('Response received:', {
-        status: response.status,
-        statusText: response.statusText
-      });
-
       const data = await response.json();
-      console.log('Response data:', data);
 
       if (!response.ok) {
         if (data.code === 'NOT_AUTHENTICATED') {
@@ -160,17 +151,16 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
         throw new Error(data.error || 'Failed to create invitation');
       }
 
-      console.log('Submission successful');
       onSuccess();
       onClose();
     } catch (err) {
       console.error('Submission error:', err);
       const errorMessage = err instanceof Error ? err.message : 'An error occurred';
-      console.log('Setting error message:', errorMessage);
       setProcessingStatus(errorMessage);
+      // Keep the error message visible for 5 seconds
+      setTimeout(() => setProcessingStatus(null), 5000);
     } finally {
       setIsSubmitting(false);
-      setTimeout(() => setProcessingStatus(null), 3000);
     }
   };
 
@@ -323,7 +313,11 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
               </div>
 
               {processingStatus && (
-                <div className="p-3 bg-teal-500/10 border border-teal-500 rounded text-teal-500">
+                <div className={`p-4 rounded-lg border ${
+                  processingStatus.toLowerCase().includes('error') || processingStatus.toLowerCase().includes('failed')
+                    ? 'bg-red-500/10 border-red-500 text-red-500'
+                    : 'bg-teal-500/10 border-teal-500 text-teal-500'
+                }`}>
                   {processingStatus}
                 </div>
               )}
@@ -545,7 +539,11 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
               </div>
 
               {processingStatus && (
-                <div className="p-3 bg-teal-500/10 border border-teal-500 rounded text-teal-500">
+                <div className={`p-4 rounded-lg border ${
+                  processingStatus.toLowerCase().includes('error') || processingStatus.toLowerCase().includes('failed')
+                    ? 'bg-red-500/10 border-red-500 text-red-500'
+                    : 'bg-teal-500/10 border-teal-500 text-teal-500'
+                }`}>
                   {processingStatus}
                 </div>
               )}
@@ -568,6 +566,14 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
               </div>
             </form>
           )}
+
+          <div>
+            <p>Don&apos;t forget to bring your notes!</p>
+          </div>
+
+          <div>
+            <p>It&apos;s important to confirm the details.</p>
+          </div>
         </div>
       </div>
     </div>

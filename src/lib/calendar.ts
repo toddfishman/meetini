@@ -1,8 +1,5 @@
-import { google } from 'googleapis';
 import { getToken } from 'next-auth/jwt';
 import type { NextApiRequest } from 'next';
-
-const calendar = google.calendar('v3');
 
 interface TimeSlot {
   start: Date;
@@ -27,15 +24,7 @@ export async function findOptimalTimes(
 ): Promise<TimeSlot[]> {
   try {
     const token = await getToken({ req });
-    if (!token) throw new Error('No token found');
-
-    const auth = new google.auth.OAuth2(
-      process.env.GOOGLE_CLIENT_ID,
-      process.env.GOOGLE_CLIENT_SECRET
-    );
-
-    const credentials = token.credentials as CalendarCredentials;
-    auth.setCredentials(credentials);
+    if (!token?.accessToken) throw new Error('No token found');
 
     // Calculate time range based on preferences
     const now = new Date();
@@ -44,29 +33,36 @@ export async function findOptimalTimes(
     timeMax.setDate(timeMax.getDate() + 14); // Look 2 weeks ahead
 
     // Get free/busy information for all participants
-    const freeBusyResponse = await calendar.freebusy.query({
-      auth,
-      requestBody: {
-        timeMin: timeMin.toISOString(),
-        timeMax: timeMax.toISOString(),
-        items: participants.map(email => ({ id: email })),
-      },
-    });
-
-    const busySlots = freeBusyResponse.data.calendars || {};
-    
-    // Find available slots that work for everyone
-    const availableSlots = findAvailableSlots(
-      timeMin,
-      timeMax,
-      busySlots,
-      preferences
+    const response = await fetch(
+      'https://www.googleapis.com/calendar/v3/freeBusy',
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token.accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          timeMin: timeMin.toISOString(),
+          timeMax: timeMax.toISOString(),
+          items: participants.map(email => ({ id: email })),
+        }),
+      }
     );
 
-    return availableSlots;
+    if (!response.ok) {
+      throw new Error(`Calendar API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    const busySlots = Object.values(data.calendars || {}).flatMap(
+      (calendar: any) => calendar.busy || []
+    );
+
+    // Find available slots
+    return findAvailableSlots(timeMin, timeMax, busySlots, preferences);
   } catch (error) {
-    console.error('Calendar API Error:', error);
-    throw new Error('Failed to find optimal meeting times');
+    console.error('Failed to find optimal times:', error);
+    return [];
   }
 }
 
@@ -80,38 +76,38 @@ function findAvailableSlots(
   }
 ): TimeSlot[] {
   const availableSlots: TimeSlot[] = [];
-  const durationInMinutes = getDurationInMinutes(preferences.durationType);
+  const duration = getDurationInMinutes(preferences.durationType);
   const workingHours = getWorkingHours(preferences.timePreference);
 
   let current = new Date(start);
   while (current < end) {
-    // Only check during working hours
-    if (isWithinWorkingHours(current, workingHours)) {
-      const slotEnd = new Date(current.getTime() + durationInMinutes * 60000);
-      
-      // Check if this slot works for all participants
-      if (isSlotAvailable(current, slotEnd, busySlots)) {
-        availableSlots.push({
-          start: new Date(current),
-          end: slotEnd,
-        });
-      }
+    const slotEnd = new Date(current.getTime() + duration * 60000);
+
+    if (
+      isWithinWorkingHours(current, workingHours) &&
+      isSlotAvailable(current, slotEnd, busySlots)
+    ) {
+      availableSlots.push({
+        start: new Date(current),
+        end: slotEnd,
+      });
     }
-    
+
     // Move to next 30-minute slot
     current.setMinutes(current.getMinutes() + 30);
   }
 
-  return availableSlots.slice(0, 5); // Return top 5 slots
+  return availableSlots;
 }
 
 function getDurationInMinutes(durationType?: string): number {
   switch (durationType) {
     case '30min':
       return 30;
+    case '1hour':
+      return 60;
     case '2hours':
       return 120;
-    case '1hour':
     default:
       return 60;
   }
@@ -124,9 +120,9 @@ function getWorkingHours(timePreference?: string): { start: number; end: number 
     case 'afternoon':
       return { start: 12, end: 17 };
     case 'evening':
-      return { start: 17, end: 20 };
+      return { start: 17, end: 21 };
     default:
-      return { start: 9, end: 20 };
+      return { start: 9, end: 17 };
   }
 }
 
@@ -141,21 +137,15 @@ function isWithinWorkingHours(
 function isSlotAvailable(
   start: Date,
   end: Date,
-  busySlots: any
+  busySlots: Array<{ start: string; end: string }>
 ): boolean {
-  // Check each participant's calendar
-  for (const calendar of Object.values(busySlots)) {
-    const busy = (calendar as any).busy || [];
-    for (const slot of busy) {
-      const busyStart = new Date(slot.start);
-      const busyEnd = new Date(slot.end);
-      
-      // Check for overlap
-      if (start < busyEnd && end > busyStart) {
-        return false;
-      }
-    }
-  }
-  
-  return true;
+  return !busySlots.some(busy => {
+    const busyStart = new Date(busy.start);
+    const busyEnd = new Date(busy.end);
+    return (
+      (start >= busyStart && start < busyEnd) ||
+      (end > busyStart && end <= busyEnd) ||
+      (start <= busyStart && end >= busyEnd)
+    );
+  });
 } 
