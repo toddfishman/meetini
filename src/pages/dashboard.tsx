@@ -155,7 +155,7 @@ export default function Dashboard() {
     const confirmActions = {
       accept: {
         title: 'Accept Invitation',
-        message: 'Are you sure you want to accept this invitation?',
+        message: 'Are you sure you want to accept this invitation? This will create a calendar event.',
         type: 'success' as const
       },
       decline: {
@@ -179,6 +179,7 @@ export default function Dashboard() {
       type,
       action: async () => {
         try {
+          // First update the invitation status
           const response = await fetch('/api/meetini', {
             method: 'PUT',
             headers: {
@@ -191,6 +192,22 @@ export default function Dashboard() {
           
           if (!response.ok) throw new Error(data.error);
           
+          // If accepting, create calendar invitation
+          if (action === 'accept') {
+            const calendarResponse = await fetch('/api/calendar/invite', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ invitationId: id }),
+            });
+
+            if (!calendarResponse.ok) {
+              const calendarError = await calendarResponse.json();
+              throw new Error(calendarError.error || 'Failed to create calendar invitation');
+            }
+          }
+
           // Update local state based on the action
           if (action === 'cancel') {
             setMeetiniInvites(prev => prev.filter(invite => invite.id !== id));
@@ -205,7 +222,7 @@ export default function Dashboard() {
           }
         } catch (error) {
           console.error('Failed to update invitation:', error);
-          setError('Failed to update invitation');
+          setError(error instanceof Error ? error.message : 'Failed to update invitation');
         }
       }
     });

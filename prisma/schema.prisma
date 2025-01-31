@@ -34,23 +34,29 @@ model User {
 }
 
 model Invitation {
-  id            String       @id @default(cuid())
-  title         String
-  status        String       @default("pending") // pending, accepted, declined, cancelled
-  type          String       // sent, received
-  participants  Participant[]
-  createdAt     DateTime     @default(now())
-  proposedTimes DateTime[]
-  location      String?
-  creator       User         @relation("SentInvitations", fields: [createdBy], references: [email])
-  createdBy     String
-  recipients    User[]       @relation("ReceivedInvitations")
-  preferences   Preferences?
-  responses     Response[]
-  recurrence    Recurrence?
-  reminders     Reminder[]
-  series        Series?      @relation(fields: [seriesId], references: [id])
-  seriesId      String?
+  id              String      @id @default(cuid())
+  title           String
+  status          String      @default("pending")
+  type            String      @default("sent")
+  createdBy       String
+  location        String?
+  proposedTimes   DateTime[]
+  calendarEventId String?     // Added field to store Google Calendar event ID
+  participants    Participant[]
+  preferences     Preferences?
+  reminders       Reminder[]
+  series          Series?     @relation(fields: [seriesId], references: [id])
+  seriesId        String?
+  creator         User        @relation("SentInvitations", fields: [createdBy], references: [email])
+  recipients      User[]      @relation("ReceivedInvitations")
+  recurrence      Recurrence?
+  responses       Response[]
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@index([createdBy])
+  @@index([status])
+  @@index([type])
 }
 
 model Series {

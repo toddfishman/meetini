@@ -54,6 +54,17 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
   const [newContact, setNewContact] = useState('');
   const [isContactPickerAvailable, setIsContactPickerAvailable] = useState(false);
   const [isSelectingContacts, setIsSelectingContacts] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [voiceState, setVoiceState] = useState({
+    isProcessing: false,
+    requiredInfo: {
+      who: false,
+      what: false,
+      when: false,
+      where: false,
+    },
+    currentQuestion: null as string | null,
+  });
 
   // Add effect to handle initialPrompt changes
   useEffect(() => {
@@ -104,110 +115,196 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
 
   const handleManualSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    console.log('Form submission started');
-    console.log('Form data:', formData);
-    setProcessingStatus('Finding optimal times...');
+    setProcessingStatus('Creating invitation...');
     setIsSubmitting(true);
 
     try {
       // Validate form
       if (!formData.title.trim()) {
-        console.log('Title validation failed');
         throw new Error('Title is required');
       }
       if (!formData.contacts.length) {
-        console.log('Contacts validation failed');
         throw new Error('At least one participant is required');
       }
       if (!formData.proposedTimes.length) {
-        console.log('Proposed times validation failed');
         throw new Error('At least one proposed time is required');
       }
-
-      console.log('Validation passed, preparing to send request');
 
       const requestBody = {
         title: formData.title.trim(),
         contacts: formData.contacts,
         location: formData.location.trim(),
         preferences: formData.preferences,
-        proposedTimes: formData.proposedTimes
+        proposedTimes: formData.proposedTimes.map(time => new Date(time).toISOString())
       };
-
-      console.log('Sending request with body:', requestBody);
 
       // Submit to API
       const response = await fetch('/api/meetini', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Accept': 'application/json',
         },
         body: JSON.stringify(requestBody),
+        credentials: 'same-origin',
       });
 
-      console.log('Response received:', {
-        status: response.status,
-        statusText: response.statusText
-      });
+      // Check if response is JSON
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        // If not JSON, get the text content for debugging
+        const textContent = await response.text();
+        console.error('Received non-JSON response:', textContent);
+        throw new Error('Server returned invalid response format');
+      }
 
       const data = await response.json();
-      console.log('Response data:', data);
 
       if (!response.ok) {
-        if (data.code === 'NOT_AUTHENTICATED') {
-          throw new Error('Please sign in to create a Meetini');
-        }
         throw new Error(data.error || 'Failed to create invitation');
       }
 
-      console.log('Submission successful');
       onSuccess();
       onClose();
     } catch (err) {
       console.error('Submission error:', err);
       const errorMessage = err instanceof Error ? err.message : 'An error occurred';
-      console.log('Setting error message:', errorMessage);
       setProcessingStatus(errorMessage);
     } finally {
       setIsSubmitting(false);
-      setTimeout(() => setProcessingStatus(null), 3000);
+      setTimeout(() => setProcessingStatus(null), 5000);
     }
+  };
+
+  const processVoiceInput = (transcript: string) => {
+    setAiPrompt(prev => prev ? `${prev} ${transcript}` : transcript);
+  };
+
+  const getNextQuestion = (info: typeof voiceState.requiredInfo) => {
+    if (!info.who) return "Who would you like to meet with?";
+    if (!info.what) return "What type of meeting would you like to schedule?";
+    if (!info.when) return "When would you prefer to meet?";
+    if (!info.where) return "Where would you like to meet?";
+    return null;
   };
 
   const startVoiceRecording = () => {
-    setIsListening(true);
-    // Implement voice recording logic here
-    // For now, we'll just simulate it
-    setTimeout(() => {
-      setIsListening(false);
-      setAiPrompt("Schedule a coffee meeting with the team next week");
-    }, 2000);
-  };
+    if (!('webkitSpeechRecognition' in window)) {
+      setError('Voice recognition is not supported in your browser');
+      return;
+    }
 
-  const validateContact = (value: string): Contact | null => {
-    // Email validation
-    if (value.includes('@')) {
-      return { type: 'email', value: value.trim() };
-    }
-    
-    // Phone validation (basic)
-    const phoneNumber = value.replace(/[^0-9+]/g, '');
-    if (phoneNumber.length >= 10) {
-      return { type: 'phone', value: phoneNumber };
-    }
-    
-    return null;
+    setIsListening(true);
+    setError(null);
+    setVoiceState(prev => ({ ...prev, isProcessing: true }));
+
+    // @ts-ignore - WebkitSpeechRecognition is not in the types
+    const recognition = new webkitSpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = false;
+
+    recognition.onresult = (event: any) => {
+      const transcript = event.results[event.results.length - 1][0].transcript;
+      processVoiceInput(transcript);
+      
+      // After processing the voice input, automatically submit if we have all required info
+      const newRequiredInfo = { ...voiceState.requiredInfo };
+      let hasAllInfo = true;
+      
+      // Check for participants (who)
+      if (transcript.match(/with\s+([^,]+(?:,\s*[^,]+)*)/i)) {
+        newRequiredInfo.who = true;
+      }
+      
+      // Check for meeting type (what)
+      if (transcript.match(/(coffee|lunch|dinner|meeting|call|zoom|virtual)/i)) {
+        newRequiredInfo.what = true;
+      }
+      
+      // Check for timing (when)
+      if (transcript.match(/(today|tomorrow|next|this|coming|week|month|morning|afternoon|evening)/i)) {
+        newRequiredInfo.when = true;
+      }
+      
+      // Check for location (where)
+      if (transcript.match(/(at|in|near|around|downtown|office|restaurant|cafe)/i)) {
+        newRequiredInfo.where = true;
+      }
+
+      // Check if we have all required information
+      for (const key of ['who', 'what', 'when'] as const) {
+        if (!newRequiredInfo[key]) {
+          hasAllInfo = false;
+        }
+      }
+
+      setVoiceState(prev => ({
+        ...prev,
+        requiredInfo: newRequiredInfo,
+        currentQuestion: hasAllInfo ? null : getNextQuestion(newRequiredInfo),
+      }));
+
+      // If we have all required info, stop listening and submit
+      if (hasAllInfo) {
+        recognition.stop();
+        setIsListening(false);
+        handleAISubmit(new Event('submit') as any);
+      }
+    };
+
+    recognition.onerror = () => {
+      setError('Failed to recognize voice. Please try again.');
+      setIsListening(false);
+      setVoiceState(prev => ({ ...prev, isProcessing: false }));
+    };
+
+    recognition.onend = () => {
+      if (voiceState.currentQuestion) {
+        recognition.start(); // Continue listening if we still have questions
+      } else {
+        setIsListening(false);
+        setVoiceState(prev => ({ ...prev, isProcessing: false }));
+      }
+    };
+
+    recognition.start();
   };
 
   const addContact = () => {
     const contact = validateContact(newContact);
     if (contact) {
-      setFormData(prev => ({
-        ...prev,
-        contacts: [...prev.contacts, contact]
-      }));
+      console.log('Adding contact:', contact);
+      setFormData(prev => {
+        const updatedContacts = [...prev.contacts, contact];
+        console.log('Updated contacts:', updatedContacts);
+        return {
+          ...prev,
+          contacts: updatedContacts
+        };
+      });
       setNewContact('');
+    } else {
+      setProcessingStatus('Invalid email or phone number format');
+      setTimeout(() => setProcessingStatus(null), 3000);
     }
+  };
+
+  const validateContact = (value: string): Contact | null => {
+    const trimmedValue = value.trim();
+    // Email validation
+    if (trimmedValue.includes('@')) {
+      console.log('Validated email contact:', trimmedValue);
+      return { type: 'email', value: trimmedValue };
+    }
+    
+    // Phone validation (basic)
+    const phoneNumber = trimmedValue.replace(/[^0-9+]/g, '');
+    if (phoneNumber.length >= 10) {
+      console.log('Validated phone contact:', phoneNumber);
+      return { type: 'phone', value: phoneNumber };
+    }
+    
+    return null;
   };
 
   const removeContact = (index: number) => {
@@ -495,11 +592,21 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
                         className="w-full p-2 rounded bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-teal-500"
                         min={new Date().toISOString().split('T')[0]}
                         onChange={e => {
-                          const date = e.target.value;
-                          setFormData(prev => ({
-                            ...prev,
-                            proposedTimes: [date]
-                          }));
+                          const selectedDate = e.target.value;
+                          const currentTime = formData.proposedTimes[0]?.split('T')[1];
+                          
+                          if (selectedDate && currentTime) {
+                            setFormData(prev => ({
+                              ...prev,
+                              proposedTimes: [`${selectedDate}T${currentTime}`]
+                            }));
+                          } else if (selectedDate) {
+                            // Store just the date part until time is selected
+                            setFormData(prev => ({
+                              ...prev,
+                              proposedTimes: [selectedDate]
+                            }));
+                          }
                         }}
                       />
                     </div>
@@ -509,13 +616,13 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
                         type="time"
                         className="w-full p-2 rounded bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-teal-500"
                         onChange={e => {
-                          const time = e.target.value;
-                          const date = formData.proposedTimes?.[0];
-                          if (date) {
-                            const dateTime = `${date}T${time}`;
+                          const selectedTime = e.target.value;
+                          const currentDate = formData.proposedTimes[0]?.split('T')[0];
+                          
+                          if (currentDate && selectedTime) {
                             setFormData(prev => ({
                               ...prev,
-                              proposedTimes: [dateTime]
+                              proposedTimes: [`${currentDate}T${selectedTime}`]
                             }));
                           }
                         }}
@@ -525,7 +632,9 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
                   {formData.proposedTimes?.map((time, index) => (
                     <div key={index} className="flex items-center justify-between p-2 rounded bg-gray-800 border border-gray-700">
                       <span className="text-gray-300">
-                        {new Date(time).toLocaleString()}
+                        {time.includes('T') 
+                          ? new Date(time).toLocaleString()
+                          : 'Select both date and time'}
                       </span>
                       <button
                         type="button"
