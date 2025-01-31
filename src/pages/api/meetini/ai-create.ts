@@ -4,6 +4,7 @@ import { authOptions } from "../auth/[...nextauth]";
 import { parseMeetingRequest } from '@/lib/openai';
 import { findOptimalTimes } from '@/lib/calendar';
 import { prisma } from '@/lib/prisma';
+import { sendNotifications } from '@/lib/notifications';
 
 interface ParsedMeetingRequest {
   title: string;
@@ -66,7 +67,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         title: parsedRequest.title,
         status: 'pending',
         type: 'sent',
-        participants: parsedRequest.participants,
+        participants: {
+          create: parsedRequest.participants.map(email => ({
+            email,
+            notifyByEmail: true,
+            notifyBySms: false
+          }))
+        },
         proposedTimes: proposedTimes.map(slot => slot.start),
         location: parsedRequest.location,
         createdBy: session.user.email,
@@ -79,11 +86,39 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         },
       },
       include: {
+        participants: true,
         preferences: true,
       },
     });
 
-    // Step 4: Create received invitations for each participant
+    // Step 4: Send notifications to all participants
+    await sendNotifications(
+      invitation.participants.map((p: { 
+        email: string | null; 
+        phoneNumber: string | null; 
+        name: string | null; 
+        notifyByEmail: boolean; 
+        notifyBySms: boolean; 
+      }) => ({
+        email: p.email || undefined,
+        phoneNumber: p.phoneNumber || undefined,
+        name: p.name || undefined,
+        notifyByEmail: p.notifyByEmail,
+        notifyBySms: p.notifyBySms
+      })),
+      {
+        type: 'invitation',
+        title: invitation.title,
+        creatorName: session.user.name || session.user.email,
+        creatorEmail: session.user.email,
+        proposedTimes: invitation.proposedTimes.map((time: Date) => time.toISOString()),
+        location: invitation.location || undefined,
+        invitationId: invitation.id,
+        actionUrl: `${process.env.NEXTAUTH_URL}/invitations/${invitation.id}`
+      }
+    );
+
+    // Step 5: Create received invitations for each participant
     await Promise.all(
       parsedRequest.participants.map(async (participant) => {
         if (participant !== session.user.email) {

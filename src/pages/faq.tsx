@@ -1,5 +1,6 @@
 import React from 'react';
 import Navbar from '../components/Navbar';
+import Image from 'next/image';
 
 const faqs = [
   {
@@ -68,19 +69,27 @@ export default function FAQ() {
   return (
     <div className="min-h-screen bg-black text-white">
       <Navbar />
-      <div className="container mx-auto px-4 py-20">
-        <h1 className="text-4xl font-bold text-center mb-12 text-teal-500">FAQs for Meetini</h1>
-        <div className="max-w-3xl mx-auto space-y-8">
-          {faqs.map((faq, index) => (
-            <div key={index} className="border border-gray-800 rounded-lg p-6 hover:border-teal-500 transition-colors">
-              <h2 className="text-xl font-bold mb-3 text-teal-500">
-                {index + 1}. {faq.question}
-              </h2>
-              <p className="text-gray-300 leading-relaxed">
-                {faq.answer}
-              </p>
-            </div>
-          ))}
+      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 pt-32">
+        <div className="mt-16">
+          <div className="flex justify-center mb-16">
+            <Image
+              src="/logos/motto1.png"
+              alt="Meetini Motto"
+              width={500}
+              height={125}
+              className="w-auto h-auto"
+              priority
+            />
+          </div>
+          <h1 className="text-4xl font-bold text-center mb-12">Frequently Asked Questions</h1>
+          <div className="space-y-8">
+            {faqs.map((faq, index) => (
+              <div key={index} className="bg-gray-900 rounded-lg p-6">
+                <h3 className="text-xl font-semibold mb-4">{faq.question}</h3>
+                <p className="text-gray-300">{faq.answer}</p>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </div>

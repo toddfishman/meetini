@@ -1,10 +1,4 @@
-import OpenAI from 'openai';
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
-interface ParsedMeetingRequest {
+interface MeetingRequest {
   title: string;
   participants: string[];
   preferences: {
@@ -13,59 +7,52 @@ interface ParsedMeetingRequest {
     locationType?: 'coffee' | 'restaurant' | 'office' | 'virtual';
   };
   location?: string;
+  priority?: number;
+  notes?: string;
 }
 
-export async function parseMeetingRequest(prompt: string): Promise<ParsedMeetingRequest> {
+export async function parseMeetingRequest(prompt: string): Promise<MeetingRequest> {
   try {
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4-1106-preview",
-      messages: [
-        {
-          role: "system",
-          content: `You are a meeting scheduler assistant. Parse the user's meeting request and extract the following information:
-          - Meeting title
-          - Participants (email addresses)
-          - Time preference (morning, afternoon, or evening)
-          - Duration (30min, 1hour, or 2hours)
-          - Location type (coffee, restaurant, office, or virtual)
-          - Specific location (if mentioned)
-          
-          Return the information in a strict JSON format with these fields:
-          {
-            "title": string,
-            "participants": string[],
-            "preferences": {
-              "timePreference": string | null,
-              "durationType": string | null,
-              "locationType": string | null
-            },
-            "location": string | null
-          }`
-        },
-        {
-          role: "user",
-          content: prompt
-        }
-      ],
-      temperature: 0.7,
-      max_tokens: 500,
-      response_format: { type: "json_object" }
+    const response = await fetch('/api/ai/parse-meeting', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ prompt }),
     });
 
-    const result = JSON.parse(completion.choices[0].message.content || '{}');
-    
-    return {
-      title: result.title,
-      participants: result.participants,
-      preferences: {
-        timePreference: result.preferences.timePreference || undefined,
-        durationType: result.preferences.durationType || undefined,
-        locationType: result.preferences.locationType || undefined,
-      },
-      location: result.location || undefined,
-    };
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to parse meeting request');
+    }
+
+    const data = await response.json();
+    return data;
   } catch (error) {
-    console.error('OpenAI API Error:', error);
+    console.error('API Error:', error);
     throw new Error('Failed to parse meeting request');
+  }
+}
+
+export async function transcribeAudio(audioBlob: Blob): Promise<string> {
+  try {
+    const formData = new FormData();
+    formData.append('audio', audioBlob, 'audio.webm');
+
+    const response = await fetch('/api/ai/transcribe', {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to transcribe audio');
+    }
+
+    const data = await response.json();
+    return data.text;
+  } catch (error) {
+    console.error('API Error:', error);
+    throw new Error('Failed to transcribe audio');
   }
 } 

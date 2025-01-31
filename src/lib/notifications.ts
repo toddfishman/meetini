@@ -86,12 +86,12 @@ CALSCALE:GREGORIAN
 METHOD:REQUEST
 BEGIN:VEVENT
 UID:${data.invitationId || Math.random().toString(36).substring(2, 15)}
-DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').split('.')[0]}Z
-DTSTART:${startTime.toISOString().replace(/[-:]/g, '').split('.')[0]}Z
-DTEND:${endTime.toISOString().replace(/[-:]/g, '').split('.')[0]}Z
+DTSTAMP:${new Date().toISOString().replace(/[-:.]/g, '').replace(/\d{3}Z$/, 'Z')}
+DTSTART:${startTime.toISOString().replace(/[-:.]/g, '').replace(/\d{3}Z$/, 'Z')}
+DTEND:${endTime.toISOString().replace(/[-:.]/g, '').replace(/\d{3}Z$/, 'Z')}
 SUMMARY:${data.title}
 ${data.location ? `LOCATION:${data.location}` : ''}
-ORGANIZER;CN=Meetini:mailto:notifications@meetini.ai
+ORGANIZER;CN=${data.creatorName || 'Meetini'}:mailto:${data.creatorEmail || 'notifications@meetini.ai'}
 ATTENDEE;PARTSTAT=NEEDS-ACTION;ROLE=REQ-PARTICIPANT;RSVP=TRUE:mailto:${recipient.email}
 END:VEVENT
 END:VCALENDAR`;

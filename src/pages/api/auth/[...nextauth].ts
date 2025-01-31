@@ -1,5 +1,6 @@
 import NextAuth, { AuthOptions } from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
+import { prisma } from "@/lib/prisma";
 
 declare module "next-auth" {
   interface Session {
@@ -29,6 +30,54 @@ export const authOptions: AuthOptions = {
   ],
   debug: process.env.NODE_ENV === 'development',
   callbacks: {
+    async signIn({ user, account }) {
+      if (account?.provider === 'google' && user.email) {
+        try {
+          // Get or create user
+          const dbUser = await prisma.user.upsert({
+            where: { email: user.email },
+            create: {
+              email: user.email,
+              name: user.name || null,
+              image: user.image || null,
+            },
+            update: {
+              name: user.name || null,
+              image: user.image || null,
+            },
+          });
+
+          // Create or update calendar account
+          if (account.access_token) {
+            await prisma.calendarAccount.upsert({
+              where: {
+                userId_provider: {
+                  userId: dbUser.id,
+                  provider: 'google',
+                },
+              },
+              create: {
+                userId: dbUser.id,
+                provider: 'google',
+                accountId: account.providerAccountId,
+                accessToken: account.access_token,
+                refreshToken: account.refresh_token,
+                expiresAt: account.expires_at ? new Date(account.expires_at * 1000) : null,
+              },
+              update: {
+                accessToken: account.access_token,
+                refreshToken: account.refresh_token,
+                expiresAt: account.expires_at ? new Date(account.expires_at * 1000) : null,
+              },
+            });
+          }
+        } catch (error) {
+          console.error('Error saving calendar account:', error);
+          // Don't block sign in if saving calendar account fails
+        }
+      }
+      return true;
+    },
     async jwt({ token, account }) {
       if (account) {
         token.accessToken = account.access_token;

@@ -31,6 +31,7 @@ model User {
   updatedAt         DateTime    @updatedAt
   image             String?
   emailVerified     DateTime?
+  meetingPreferences MeetingPreferences?
 }
 
 model Invitation {
@@ -248,4 +249,15 @@ model Contact {
 
   @@index([userId])
   @@unique([userId, type, value])
+}
+
+model MeetingPreferences {
+  id                 String   @id @default(cuid())
+  userId            String   @unique
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  locationPreferences String  // JSON string
+  virtualMeetings    String  // JSON string
+  schedulingRules    String  // JSON string
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 } 

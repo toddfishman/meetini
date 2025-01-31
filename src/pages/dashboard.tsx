@@ -99,11 +99,18 @@ export default function Dashboard() {
   }, [session, fetchInvites]);
 
   useEffect(() => {
-    // Check for prompt in URL when component mounts
+    // Check for prompt or openCreateModal in URL when component mounts
     const prompt = router.query.prompt as string;
+    const shouldOpenModal = router.query.openCreateModal === 'true';
+    
     if (prompt && !initialPrompt) {
       setInitialPrompt(prompt);
       setIsCreateModalOpen(true);
+    } else if (shouldOpenModal) {
+      setIsCreateModalOpen(true);
+      // Remove the query parameter without page reload
+      const { openCreateModal, ...query } = router.query;
+      router.replace({ pathname: router.pathname, query }, undefined, { shallow: true });
     }
   }, [router.query, initialPrompt]);
 
@@ -231,32 +238,66 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen bg-black text-white p-8">
       <Navbar />
-      <div className="pt-16">
-        <div className="flex justify-center mb-8">
-          <Image
-            src="/logos/logo-with-words.png"
-            alt="Meetini Logo"
-            width={240}
-            height={80}
-            priority
-            className="object-contain"
-          />
+      <div className="pt-40 max-w-4xl mx-auto space-y-12">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold">Welcome to Your Dashboard</h1>
+            {session?.user?.email && (
+              <p className="text-gray-400 mt-1">Logged in as: {session.user.email}</p>
+            )}
+          </div>
+          <button
+            onClick={() => setIsCreateModalOpen(true)}
+            className="px-4 py-2 rounded-lg bg-teal-500 text-white hover:bg-teal-600 transition-colors text-sm font-medium"
+          >
+            Create New Meetini
+          </button>
         </div>
-        <h1 className="text-2xl font-bold mb-4">Welcome to Your Dashboard</h1>
-        {session?.user?.email && (
-          <p className="mb-4">Logged in as: {session.user.email}</p>
-        )}
         
+        {/* Calendar Events Section - Single Row Expandable */}
+        <div className="border border-gray-800 rounded-lg overflow-hidden">
+          <button
+            className="w-full p-4 bg-gray-900 text-left font-medium text-teal-500 hover:bg-gray-800 transition-colors flex justify-between items-center"
+            onClick={() => setExpandedEvents(prev => 
+              prev.length === Object.keys(groupedEvents).length ? [] : Object.keys(groupedEvents)
+            )}
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-lg">Calendar Events</span>
+              {loading && <span className="text-sm text-gray-400">(Loading...)</span>}
+            </div>
+            <span className="text-sm text-gray-400">
+              {events.length} total event{events.length !== 1 ? 's' : ''}
+            </span>
+          </button>
+          
+          {expandedEvents.length > 0 && (
+            <div className="bg-black/30">
+              {Object.entries(groupedEvents).map(([monthYear, monthEvents]) => (
+                <div key={monthYear} className="border-t border-gray-800">
+                  <div className="p-4">
+                    <div className="font-medium text-teal-500 mb-2">{monthYear}</div>
+                    <div className="space-y-3">
+                      {monthEvents.map((event) => (
+                        <div key={event.id} className="pl-4 border-l-2 border-gray-800">
+                          <h3 className="font-medium text-white">{event.summary}</h3>
+                          <p className="text-sm text-gray-400">
+                            {new Date(event.start.dateTime || event.start.date || Date.now()).toLocaleString()}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
         {/* Meetini Invitations Section */}
-        <div className="space-y-4 mb-8">
+        <div className="space-y-4">
           <div className="flex justify-between items-center">
             <h2 className="text-xl font-semibold">Your Meetini Invitations</h2>
-            <button
-              onClick={() => setIsCreateModalOpen(true)}
-              className="px-4 py-2 rounded-lg bg-teal-500 text-white hover:bg-teal-600 transition-colors text-sm font-medium"
-            >
-              Create New Meetini
-            </button>
           </div>
 
           {error && (
@@ -354,44 +395,6 @@ export default function Dashboard() {
             )}
           </div>
         </div>
-
-        {/* Calendar Events Section */}
-        <div className="space-y-4">
-          <h2 className="text-xl font-semibold">Your Calendar Events</h2>
-          {loading ? (
-            <p>Loading events...</p>
-          ) : events.length > 0 ? (
-            <div className="space-y-4">
-              {Object.entries(groupedEvents).map(([monthYear, monthEvents]) => (
-                <div key={monthYear} className="border border-gray-800 rounded-lg overflow-hidden">
-                  <button
-                    className="w-full p-4 bg-gray-900 text-left font-medium text-teal-500 hover:bg-gray-800 transition-colors flex justify-between items-center"
-                    onClick={() => toggleEvent(monthYear)}
-                  >
-                    <span>{monthYear}</span>
-                    <span className="text-sm text-gray-400">
-                      {monthEvents.length} event{monthEvents.length !== 1 ? 's' : ''}
-                    </span>
-                  </button>
-                  {expandedEvents.includes(monthYear) && (
-                    <div className="divide-y divide-gray-800">
-                      {monthEvents.map((event) => (
-                        <div key={event.id} className="p-4 hover:bg-gray-900 transition-colors">
-                          <h3 className="font-medium text-teal-500">{event.summary}</h3>
-                          <p className="text-sm text-gray-400">
-                            {new Date(event.start.dateTime || event.start.date || Date.now()).toLocaleString()}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p>No events found</p>
-          )}
-        </div>
       </div>
 
       {/* Modals */}
@@ -400,7 +403,6 @@ export default function Dashboard() {
         onClose={() => {
           setIsCreateModalOpen(false);
           setInitialPrompt(null);
-          // Remove prompt from URL without page reload
           const { prompt, ...query } = router.query;
           router.replace({ pathname: router.pathname, query }, undefined, { shallow: true });
         }}

@@ -23,9 +23,12 @@ export default function CalendarSettings() {
   const { data: session } = useSession();
   const [accounts, setAccounts] = useState<CalendarAccount[]>([]);
   const [preferences, setPreferences] = useState<CalendarPreferences>({
-    workDays: [],
-    workingHours: null,
-    timezone: null,
+    workDays: [1, 2, 3, 4, 5], // Initialize with Monday-Friday
+    workingHours: {
+      start: '09:00',
+      end: '17:00'
+    },
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
   });
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

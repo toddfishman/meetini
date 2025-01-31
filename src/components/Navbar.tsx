@@ -6,6 +6,7 @@ import { useRouter } from 'next/router';
 import { handleBiometricAuth, isBiometricsAvailable } from '@/lib/biometrics';
 import FaceIDSetup from './FaceIDSetup';
 import Toast, { ToastType } from './Toast';
+import HamburgerMenu from './HamburgerMenu';
 
 export default function Navbar() {
   const { data: session } = useSession();
@@ -45,14 +46,14 @@ export default function Navbar() {
   };
 
   return (
-    <nav className="fixed top-0 left-0 right-0 bg-black shadow-sm z-50">
+    <nav className="fixed w-full bg-black shadow-lg z-50">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex justify-between items-center h-24 py-2">
-          <div className="flex items-center">
+        <div className="flex justify-between h-24 items-center">
+          <div className="flex-shrink-0">
             <Link href="/" className="flex items-center">
               <Image
                 src="/logos/beta-logo.png"
-                alt="Meetini Logo"
+                alt="Meetini"
                 width={200}
                 height={200}
                 className="w-auto h-auto"
@@ -62,49 +63,23 @@ export default function Navbar() {
           </div>
 
           <div className="flex items-center space-x-4">
-            <Link
-              href="/faq"
-              className="text-white hover:text-gray-300 transition-colors font-medium"
-            >
-              FAQ
-            </Link>
-
             {session ? (
-              <div className="flex items-center space-x-4">
-                <Link
-                  href="/settings"
-                  className="text-white hover:text-gray-300 transition-colors font-medium"
-                >
-                  Settings
-                </Link>
+              <>
+                <HamburgerMenu />
                 <button
-                  onClick={() => setShowFaceIDSetup(true)}
-                  className="text-white hover:text-gray-300 transition-colors font-medium"
-                >
-                  Set Up Face ID
-                </button>
-                <button
-                  onClick={handleSignOut}
-                  className="text-white hover:text-gray-300 transition-colors font-medium"
+                  onClick={() => signOut()}
+                  className="text-sm text-gray-300 hover:text-white"
                 >
                   Sign Out
                 </button>
-              </div>
+              </>
             ) : (
-              <button
-                onClick={handleLogin}
-                disabled={isAuthenticating}
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-black bg-white hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-white disabled:opacity-50"
+              <Link
+                href="/api/auth/signin"
+                className="text-sm text-gray-300 hover:text-white"
               >
-                {isAuthenticating ? (
-                  <>
-                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-black mr-2" />
-                    Authenticating...
-                  </>
-                ) : (
-                  'Log In/Sign Up'
-                )}
-              </button>
+                Sign In
+              </Link>
             )}
           </div>
         </div>
