@@ -13,7 +13,7 @@ interface MeetingRequest {
 
 export async function parseMeetingRequest(prompt: string): Promise<MeetingRequest> {
   try {
-    const response = await fetch('/api/ai/parse-meeting', {
+    const response = await fetch(`${process.env.NEXT_PUBLIC_BASE_API_URL}/ai/parse-meeting`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -36,8 +36,12 @@ export async function parseMeetingRequest(prompt: string): Promise<MeetingReques
 
 export async function transcribeAudio(audioBlob: Blob): Promise<string> {
   try {
+    // Create a FormData object
     const formData = new FormData();
-    formData.append('audio', audioBlob, 'audio.webm');
+    
+    // Convert webm to mp3 if needed (browser default is webm)
+    const finalBlob = new Blob([audioBlob], { type: 'audio/webm' });
+    formData.append('audio', finalBlob, 'recording.webm');
 
     const response = await fetch('/api/ai/transcribe', {
       method: 'POST',
@@ -46,13 +50,14 @@ export async function transcribeAudio(audioBlob: Blob): Promise<string> {
 
     if (!response.ok) {
       const error = await response.json();
+      console.error('Transcription error:', error);
       throw new Error(error.error || 'Failed to transcribe audio');
     }
 
     const data = await response.json();
     return data.text;
   } catch (error) {
-    console.error('API Error:', error);
+    console.error('Transcription error:', error);
     throw new Error('Failed to transcribe audio');
   }
 } 

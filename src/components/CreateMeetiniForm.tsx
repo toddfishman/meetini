@@ -73,6 +73,8 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
     },
     currentQuestion: null as string | null,
   });
+  const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
+  const [audioContext, setAudioContext] = useState<AudioContext | null>(null);
 
   // Add effect to handle initialPrompt changes
   useEffect(() => {
@@ -86,12 +88,33 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
     setIsContactPickerAvailable(isContactPickerSupported());
   }, []);
 
+  useEffect(() => {
+    let timeoutId: NodeJS.Timeout;
+    
+    if (isListening) {
+      // Stop recording after 30 seconds
+      timeoutId = setTimeout(() => {
+        console.log('Recording timeout reached');
+        stopVoiceRecording();
+      }, 30000);
+    }
+
+    return () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    };
+  }, [isListening]);
+
   const handleAISubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setProcessingStatus('🤖 Analyzing your request...');
     setIsSubmitting(true);
 
     try {
+      console.log('AI Prompt:', aiPrompt);
+      console.log('Sending AI request with prompt:', aiPrompt);
+
       const response = await fetch('/api/meetini/ai-create', {
         method: 'POST',
         headers: {
@@ -206,92 +229,82 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
   };
 
   const stopVoiceRecording = () => {
-    if (window.recognition) {
-      window.recognition.stop();
+    if (mediaRecorder && mediaRecorder.state === 'recording') {
+      mediaRecorder.stop();
       setIsListening(false);
-      setVoiceState(prev => ({ ...prev, isProcessing: false }));
+      setVoiceState(prev => ({ ...prev, recordingStatus: 'transcribing' }));
     }
   };
 
-  const startVoiceRecording = () => {
-    if (!('webkitSpeechRecognition' in window)) {
-      setError('Voice recognition is not supported in your browser');
+  const startVoiceRecording = async () => {
+    if (!('MediaRecorder' in window)) {
+      setError('Voice recording is not supported in your browser');
       return;
     }
 
-    setIsListening(true);
-    setError(null);
-    setVoiceState(prev => ({ ...prev, isProcessing: true }));
-
-    // @ts-ignore - WebkitSpeechRecognition is not in the types
-    const recognition = new webkitSpeechRecognition();
-    // Store recognition instance globally so we can stop it
-    window.recognition = recognition;
-    recognition.continuous = true;
-    recognition.interimResults = false;
-
-    recognition.onresult = (event: any) => {
-      const transcript = event.results[event.results.length - 1][0].transcript;
-      processVoiceInput(transcript);
-      
-      // After processing the voice input, automatically submit if we have all required info
-      const newRequiredInfo = { ...voiceState.requiredInfo };
-      let hasAllInfo = true;
-      
-      // Check for participants (who)
-      if (transcript.match(/with\s+([^,]+(?:,\s*[^,]+)*)/i)) {
-        newRequiredInfo.who = true;
-      }
-      
-      // Check for meeting type (what)
-      if (transcript.match(/(coffee|lunch|dinner|meeting|call|zoom|virtual)/i)) {
-        newRequiredInfo.what = true;
-      }
-      
-      // Check for timing (when)
-      if (transcript.match(/(today|tomorrow|next|this|coming|week|month|morning|afternoon|evening)/i)) {
-        newRequiredInfo.when = true;
-      }
-      
-      // Check for location (where)
-      if (transcript.match(/(at|in|near|around|downtown|office|restaurant|cafe)/i)) {
-        newRequiredInfo.where = true;
+    try {
+      // Stop any existing recording
+      if (isListening) {
+        stopVoiceRecording();
+        return;
       }
 
-      // Check if we have all required information
-      for (const key of ['who', 'what', 'when'] as const) {
-        if (!newRequiredInfo[key]) {
-          hasAllInfo = false;
+      setIsListening(true);
+      setError(null);
+      setVoiceState(prev => ({ ...prev, recordingStatus: 'recording' }));
+      
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          channelCount: 1,
+          sampleRate: 16000,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        } 
+      });
+
+      // Use basic audio/webm format
+      const newMediaRecorder = new MediaRecorder(stream);
+      console.log('MediaRecorder created with mimeType:', newMediaRecorder.mimeType);
+
+      const audioChunks: Blob[] = [];
+
+      // Set up audio context for silence detection
+      const newAudioContext = new AudioContext();
+      const audioSource = newAudioContext.createMediaStreamSource(stream);
+      const analyser = newAudioContext.createAnalyser();
+      analyser.fftSize = 2048;
+      analyser.smoothingTimeConstant = 0.8;
+      audioSource.connect(analyser);
+
+      setMediaRecorder(newMediaRecorder);
+      setAudioContext(newAudioContext);
+
+      newMediaRecorder.ondataavailable = async (event) => {
+        console.log('Data available:', event.data.size, 'bytes');
+        if (event.data.size > 0) {
+          audioChunks.push(event.data);
         }
-      }
+      };
 
-      setVoiceState(prev => ({
-        ...prev,
-        requiredInfo: newRequiredInfo,
-        currentQuestion: hasAllInfo ? null : getNextQuestion(newRequiredInfo),
-      }));
+      newMediaRecorder.onstop = async () => {
+        try {
+          const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+          console.log('Created audio blob:', {
+            size: audioBlob.size,
+            type: audioBlob.type
+          });
+          // Process the audio blob here
+        } catch (error) {
+          console.error('Error processing audio blob:', error);
+        }
+      };
 
-      // If we have all required info, stop listening and submit
-      if (hasAllInfo) {
-        stopVoiceRecording();
-        handleAISubmit(new Event('submit') as any);
-      }
-    };
-
-    recognition.onerror = () => {
-      setError('Failed to recognize voice. Please try again.');
-      stopVoiceRecording();
-    };
-
-    recognition.onend = () => {
-      if (voiceState.currentQuestion) {
-        recognition.start(); // Continue listening if we still have questions
-      } else {
-        stopVoiceRecording();
-      }
-    };
-
-    recognition.start();
+      newMediaRecorder.start();
+    } catch (error) {
+      console.error('Error starting voice recording:', error);
+      setError('Failed to start voice recording. Please try again.');
+    }
   };
 
   const addContact = () => {
@@ -421,8 +434,9 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
                     type="text"
                     value={aiPrompt}
                     onChange={e => setAiPrompt(e.target.value)}
-                    className="flex-1 p-3 rounded-lg bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-teal-500"
+                    className="flex-1 p-3 rounded-lg bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-teal-500 resize-none overflow-hidden"
                     placeholder="e.g., Schedule a coffee meeting with Jane and John next week"
+                    style={{ height: 'auto' }}
                   />
                   <button
                     type="button"

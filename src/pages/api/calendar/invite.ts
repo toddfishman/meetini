@@ -1,21 +1,30 @@
 import { google } from 'googleapis';
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { prisma, Prisma } from '@/lib/prisma';
+import { prisma } from '@/lib/prisma';
 import { getToken } from 'next-auth/jwt';
 import { getSession } from 'next-auth/react';
 import { JWT } from 'next-auth/jwt';
-import type { Participant } from '@prisma/client';
+import type { Invitation, Participant } from '.prisma/client';
 
 interface GoogleToken extends JWT {
   accessToken?: string;
 }
 
-type InvitationWithParticipants = Prisma.InvitationGetPayload<{
-  include: {
-    participants: true;
-    preferences: true;
+type InvitationWithParticipants = Invitation & {
+  participants: Participant[];
+  preferences: {
+    workDays: string[];
+    workingHours: {
+      start: string;
+      end: string;
+    };
+    timezone: string;
+    durationType: string;
   };
-}>;
+  proposedTimes: Date[];
+  title: string;
+  location?: string | null;
+};
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -44,7 +53,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         participants: true,
         preferences: true,
       },
-    });
+    }) as InvitationWithParticipants | null;
 
     if (!invitation) {
       return res.status(404).json({ error: 'Invitation not found' });
@@ -57,6 +66,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     );
     auth.setCredentials({ access_token: token.accessToken });
     const calendar = google.calendar({ version: 'v3', auth });
+
+    // Handle participants
+    const participantEmails = invitation.participants.map((p: Participant) => p.email);
+    const attendees = participantEmails.map((participant: string) => ({
+      email: participant,
+      responseStatus: 'needsAction',
+    }));
 
     // Create calendar event
     const event = {
@@ -71,12 +87,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         dateTime: new Date(invitation.proposedTimes[0].getTime() + getDurationInMinutes(invitation.preferences?.durationType) * 60000).toISOString(),
         timeZone: 'UTC',
       },
-      attendees: invitation.participants
-        .filter((p) => p.email !== null)
-        .map((participant) => ({
-          email: participant.email!,
-          responseStatus: 'needsAction',
-        })),
+      attendees: attendees,
       reminders: {
         useDefault: true,
       },

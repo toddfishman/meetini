@@ -8,7 +8,20 @@ import { isBiometricsAvailable, handleBiometricAuth } from '@/lib/biometrics';
 import Image from 'next/image';
 import HamburgerMenu from '@/components/HamburgerMenu';
 import Link from 'next/link';
-import { transcribeAudio, parseMeetingRequest } from '@/lib/openai';
+import { parseMeetingRequest } from '@/lib/openai';
+
+// Add these interfaces at the top of the file, after the imports
+interface Window {
+  webkitSpeechRecognition: any;
+  currentRecognition: any;
+}
+
+declare global {
+  interface Window {
+    webkitSpeechRecognition: any;
+    currentRecognition: any;
+  }
+}
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -19,6 +32,15 @@ const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
 });
+
+interface ParsedRequest {
+  participants: any[];
+  preferences: {
+    timePreference?: string;
+    durationType?: string;
+    locationType?: string;
+  };
+}
 
 export default function Home() {
   const { data: session, status } = useSession();
@@ -38,7 +60,7 @@ export default function Home() {
       where: boolean;
       priority: boolean;
     };
-    parsedRequest: any | null;
+    parsedRequest: ParsedRequest | null;
     recordingStatus: 'idle' | 'recording' | 'transcribing' | 'processing';
   }>({
     isProcessing: false,
@@ -175,27 +197,24 @@ export default function Home() {
   };
 
   const stopRecording = () => {
-    console.log('Stopping recording...');
-    if (mediaRecorder && mediaRecorder.state === 'recording') {
-      mediaRecorder.stop();
-      mediaRecorder.stream.getTracks().forEach(track => track.stop());
-    }
-    if (audioContext) {
-      audioContext.close();
+    // @ts-ignore - accessing from window
+    if (window.currentRecognition) {
+      // @ts-ignore - accessing from window
+      window.currentRecognition.stop();
+      // @ts-ignore - cleanup
+      window.currentRecognition = null;
     }
     setIsListening(false);
-    setMediaRecorder(null);
-    setAudioContext(null);
+    setVoiceState(prev => ({ ...prev, recordingStatus: 'idle' }));
   };
 
   const startVoiceRecording = async () => {
-    if (!('MediaRecorder' in window)) {
-      setError('Voice recording is not supported in your browser');
+    if (!('webkitSpeechRecognition' in window)) {
+      setError('Speech recognition is not supported in your browser. Please use Chrome.');
       return;
     }
 
     try {
-      // Stop any existing recording
       if (isListening) {
         stopRecording();
         return;
@@ -204,120 +223,81 @@ export default function Home() {
       setIsListening(true);
       setError(null);
       setVoiceState(prev => ({ ...prev, recordingStatus: 'recording' }));
-      
-      console.log('Requesting microphone access...');
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      console.log('Microphone access granted');
-      
-      const newMediaRecorder = new MediaRecorder(stream);
-      const audioChunks: Blob[] = [];
 
-      // Set up audio context for silence detection
-      const newAudioContext = new AudioContext();
-      const audioSource = newAudioContext.createMediaStreamSource(stream);
-      const analyser = newAudioContext.createAnalyser();
-      analyser.fftSize = 512;
-      analyser.smoothingTimeConstant = 0.4;
-      audioSource.connect(analyser);
+      // @ts-ignore - webkitSpeechRecognition is not in TypeScript types
+      const recognition = new window.webkitSpeechRecognition();
+      recognition.continuous = true; // Allow continuous recording
+      recognition.interimResults = true;
+      recognition.maxAlternatives = 1;
+      recognition.lang = 'en-US';
 
-      setMediaRecorder(newMediaRecorder);
-      setAudioContext(newAudioContext);
+      let finalTranscript = '';
 
-      const dataArray = new Float32Array(analyser.frequencyBinCount);
-      let silenceStart: number | null = null;
-      const SILENCE_THRESHOLD = -65; // dB
-      const SILENCE_DURATION = 3000; // 3 seconds
-
-      // Function to check audio level
-      const checkAudioLevel = () => {
-        if (!isListening) return;
-        
-        analyser.getFloatFrequencyData(dataArray);
-        const average = dataArray.reduce((sum, value) => sum + value, 0) / dataArray.length;
-        
-        if (average < SILENCE_THRESHOLD) {
-          if (!silenceStart) {
-            silenceStart = Date.now();
-          } else if (Date.now() - silenceStart >= SILENCE_DURATION) {
-            console.log('Silence detected, stopping recording');
-            stopRecording();
-            return;
-          }
-        } else {
-          silenceStart = null;
-        }
-        
-        requestAnimationFrame(checkAudioLevel);
+      recognition.onstart = () => {
+        console.log('Speech recognition started');
+        setError(null);
       };
 
-      newMediaRecorder.ondataavailable = (event) => {
-        audioChunks.push(event.data);
-      };
-
-      newMediaRecorder.onstop = async () => {
-        console.log('Recording stopped, processing audio...');
-        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+      recognition.onresult = (event: any) => {
+        let interimTranscript = '';
         
-        try {
-          setVoiceState(prev => ({ ...prev, recordingStatus: 'transcribing' }));
-          console.log('Transcribing audio...');
-          // First, transcribe the audio using Whisper
-          const transcript = await transcribeAudio(audioBlob);
-          console.log('Transcription received:', transcript);
-          setPrompt(transcript);
-
-          setVoiceState(prev => ({ ...prev, recordingStatus: 'processing' }));
-          console.log('Parsing transcript...');
-          // Then, parse the transcript using GPT-4
-          const parsedRequest = await parseMeetingRequest(transcript);
-          console.log('Parsed request:', parsedRequest);
-          
-          // Update UI with parsed information
-          setVoiceState(prev => ({
-            ...prev,
-            isProcessing: false,
-            currentQuestion: null,
-            parsedRequest,
-            recordingStatus: 'idle'
-          }));
-
-          // If we have all required information, enable the submit button
-          if (parsedRequest.participants.length > 0 && 
-              parsedRequest.preferences.timePreference &&
-              parsedRequest.preferences.durationType) {
-            setIsListening(false);
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          const transcript = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            finalTranscript += transcript + ' ';
           } else {
-            // If we're missing information, ask for it
-            const nextQuestion = getNextQuestion(parsedRequest);
-            if (nextQuestion) {
-              setVoiceState(prev => ({
-                ...prev,
-                currentQuestion: nextQuestion
-              }));
-            }
+            interimTranscript += transcript;
           }
-        } catch (error) {
-          console.error('Processing error:', error);
-          setError('Failed to process voice input. Please try again.');
-          setIsListening(false);
-          setVoiceState(prev => ({ ...prev, recordingStatus: 'idle' }));
+        }
+
+        // Update the prompt with both final and interim results
+        setPrompt(finalTranscript + interimTranscript);
+      };
+
+      recognition.onerror = (event: any) => {
+        console.error('Speech recognition error:', event.error);
+        if (event.error === 'no-speech') {
+          setError('No speech detected. Please try again and speak clearly.');
+        } else if (event.error === 'audio-capture') {
+          setError('No microphone detected. Please check your microphone settings.');
+        } else if (event.error === 'not-allowed') {
+          setError('Microphone access denied. Please allow microphone access and try again.');
+        } else {
+          setError('Failed to recognize speech. Please try again.');
+        }
+        stopRecording();
+      };
+
+      recognition.onend = () => {
+        console.log('Speech recognition ended');
+        setVoiceState(prev => ({ ...prev, recordingStatus: 'idle' }));
+        setIsListening(false);
+        // Only set final transcript if we have content
+        if (finalTranscript.trim()) {
+          setPrompt(finalTranscript.trim());
         }
       };
 
-      // Start recording and silence detection
-      console.log('Starting recording...');
-      newMediaRecorder.start();
-      requestAnimationFrame(checkAudioLevel);
+      recognition.start();
+      // Store the recognition instance
+      // @ts-ignore - adding to window for cleanup
+      window.currentRecognition = recognition;
+
+      // Automatically stop after 15 seconds
+      setTimeout(() => {
+        if (window.currentRecognition) {
+          window.currentRecognition.stop();
+        }
+      }, 15000);
 
     } catch (error) {
-      console.error('Recording error:', error);
-      setError('Failed to start recording. Please check your microphone permissions.');
-      setIsListening(false);
+      console.error('Error starting speech recognition:', error);
+      setError('Failed to start speech recognition. Please try again.');
       setVoiceState(prev => ({ ...prev, recordingStatus: 'idle' }));
     }
   };
 
-  const getNextQuestion = (parsedRequest: any) => {
+  const getNextQuestion = (parsedRequest: ParsedRequest): string | null => {
     if (!parsedRequest.participants.length) {
       return "Who would you like to meet with?";
     }
@@ -333,9 +313,9 @@ export default function Home() {
     return null;
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
+  const handleKeyPress = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
       handlePromptSubmit();
     }
   };
@@ -491,7 +471,7 @@ export default function Home() {
 
           {/* Footer */}
           <div className="mt-4 mb-4 text-gray-400 text-sm flex items-center justify-center space-x-4">
-            <a href="#" className="hover:text-white transition-colors">Privacy Policy</a>
+            <a href="/privacypolicy" className="hover:text-white transition-colors">Privacy Policy</a>
             <span className="text-gray-600">•</span>
             <a href="mailto:support@meetini.app" className="hover:text-white transition-colors">Contact Us</a>
           </div>

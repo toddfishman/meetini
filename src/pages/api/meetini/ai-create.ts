@@ -51,8 +51,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'Prompt is required' });
     }
 
+    // Log the incoming prompt
+    console.log('Received prompt:', prompt);
+
+    // Log the incoming request body
+    console.log('Request body:', req.body);
+
     // Step 1: Parse the natural language request using AI
     const parsedRequest = await parseMeetingRequest(prompt);
+
+    // Log the parsed request
+    console.log('Parsed request:', parsedRequest);
 
     // Step 2: Find optimal meeting times using calendar availability
     const proposedTimes = await findOptimalTimes(
@@ -60,6 +69,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       parsedRequest.participants,
       parsedRequest.preferences
     );
+
+    // Log the proposed times
+    console.log('Proposed times:', proposedTimes);
 
     // Step 3: Create the invitation in the database
     const invitation = await prisma.invitation.create({
@@ -91,6 +103,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
     });
 
+    // Log the invitation details before sending notifications
+    console.log('Invitation details:', invitation);
+
     // Step 4: Send notifications to all participants
     await sendNotifications(
       invitation.participants.map((p: { 
@@ -117,6 +132,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         actionUrl: `${process.env.NEXTAUTH_URL}/invitations/${invitation.id}`
       }
     );
+
+    // Log participant notifications
+    console.log('Sending notifications to:', invitation.participants.map((p: { email: string | null }) => p.email));
 
     // Step 5: Create received invitations for each participant
     await Promise.all(
@@ -146,10 +164,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     return res.status(200).json(invitation);
   } catch (error) {
-    console.error('Failed to process AI request:', error);
+    console.error('Failed to process AI request:', {
+      message: error instanceof Error ? error.message : 'Unknown error',
+      stack: error instanceof Error ? error.stack : undefined,
+    });
     return res.status(500).json({ 
       error: 'Failed to process request',
-      code: 'AI_PROCESSING_ERROR'
+      details: error instanceof Error ? error.message : 'Unknown error',
+      timestamp: new Date().toISOString(),
     });
   }
 } 
