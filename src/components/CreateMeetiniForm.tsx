@@ -237,13 +237,12 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
   };
 
   const startVoiceRecording = async () => {
-    if (!('MediaRecorder' in window)) {
-      setError('Voice recording is not supported in your browser');
+    if (!('webkitSpeechRecognition' in window)) {
+      setError('Speech recognition is not supported in your browser. Please use Chrome.');
       return;
     }
 
     try {
-      // Stop any existing recording
       if (isListening) {
         stopVoiceRecording();
         return;
@@ -251,59 +250,76 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
 
       setIsListening(true);
       setError(null);
-      setVoiceState(prev => ({ ...prev, recordingStatus: 'recording' }));
-      
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        audio: {
-          channelCount: 1,
-          sampleRate: 16000,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        } 
-      });
 
-      // Use basic audio/webm format
-      const newMediaRecorder = new MediaRecorder(stream);
-      console.log('MediaRecorder created with mimeType:', newMediaRecorder.mimeType);
+      // @ts-ignore - webkitSpeechRecognition is not in TypeScript types
+      const recognition = new window.webkitSpeechRecognition();
+      recognition.continuous = true; // Allow continuous recording
+      recognition.interimResults = true;
+      recognition.maxAlternatives = 1;
+      recognition.lang = 'en-US';
 
-      const audioChunks: Blob[] = [];
+      let finalTranscript = '';
 
-      // Set up audio context for silence detection
-      const newAudioContext = new AudioContext();
-      const audioSource = newAudioContext.createMediaStreamSource(stream);
-      const analyser = newAudioContext.createAnalyser();
-      analyser.fftSize = 2048;
-      analyser.smoothingTimeConstant = 0.8;
-      audioSource.connect(analyser);
+      recognition.onstart = () => {
+        console.log('Speech recognition started');
+        setError(null);
+      };
 
-      setMediaRecorder(newMediaRecorder);
-      setAudioContext(newAudioContext);
+      recognition.onresult = (event: any) => {
+        let interimTranscript = '';
+        
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          const transcript = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            finalTranscript += transcript + ' ';
+          } else {
+            interimTranscript += transcript;
+          }
+        }
 
-      newMediaRecorder.ondataavailable = async (event) => {
-        console.log('Data available:', event.data.size, 'bytes');
-        if (event.data.size > 0) {
-          audioChunks.push(event.data);
+        // Update the prompt with both final and interim results
+        setAiPrompt(finalTranscript + interimTranscript);
+      };
+
+      recognition.onerror = (event: any) => {
+        console.error('Speech recognition error:', event.error);
+        if (event.error === 'no-speech') {
+          setError('No speech detected. Please try again and speak clearly.');
+        } else if (event.error === 'audio-capture') {
+          setError('No microphone detected. Please check your microphone settings.');
+        } else if (event.error === 'not-allowed') {
+          setError('Microphone access denied. Please allow microphone access and try again.');
+        } else {
+          setError('Failed to recognize speech. Please try again.');
+        }
+        stopVoiceRecording();
+      };
+
+      recognition.onend = () => {
+        console.log('Speech recognition ended');
+        setIsListening(false);
+        // Only set final transcript if we have content
+        if (finalTranscript.trim()) {
+          setAiPrompt(finalTranscript.trim());
         }
       };
 
-      newMediaRecorder.onstop = async () => {
-        try {
-          const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-          console.log('Created audio blob:', {
-            size: audioBlob.size,
-            type: audioBlob.type
-          });
-          // Process the audio blob here
-        } catch (error) {
-          console.error('Error processing audio blob:', error);
-        }
-      };
+      recognition.start();
+      // Store the recognition instance
+      // @ts-ignore - adding to window for cleanup
+      window.recognition = recognition;
 
-      newMediaRecorder.start();
+      // Automatically stop after 15 seconds
+      setTimeout(() => {
+        if (window.recognition) {
+          window.recognition.stop();
+        }
+      }, 15000);
+
     } catch (error) {
-      console.error('Error starting voice recording:', error);
-      setError('Failed to start voice recording. Please try again.');
+      console.error('Error starting speech recognition:', error);
+      setError('Failed to start speech recognition. Please try again.');
+      setIsListening(false);
     }
   };
 
