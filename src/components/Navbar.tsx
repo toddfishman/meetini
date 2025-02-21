@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { useSession, signIn, signOut } from 'next-auth/react';
@@ -6,7 +6,6 @@ import { useRouter } from 'next/router';
 import { handleBiometricAuth, isBiometricsAvailable } from '@/lib/biometrics';
 import FaceIDSetup from './FaceIDSetup';
 import Toast, { ToastType } from './Toast';
-import HamburgerMenu from './HamburgerMenu';
 
 export default function Navbar() {
   const { data: session } = useSession();
@@ -18,9 +17,11 @@ export default function Navbar() {
     type: 'success',
     message: '',
   });
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   const showToast = (type: ToastType, message: string) => {
     setToast({ show: true, type, message });
+    setTimeout(() => setToast({ show: false, type: 'success', message: '' }), 3000);
   };
 
   const handleSignOut = async () => {
@@ -46,10 +47,10 @@ export default function Navbar() {
   };
 
   return (
-    <nav className="fixed w-full bg-black shadow-lg z-50">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex justify-between h-24 items-center">
-          <div className="flex-shrink-0">
+    <nav className="fixed top-0 left-0 right-0 z-50 bg-black/80 backdrop-blur-sm">
+      <div className="max-w-6xl mx-auto px-4">
+        <div className="flex justify-between items-center h-20">
+          <div className="flex items-center">
             <Link href="/" className="flex items-center">
               <Image
                 src="/logos/beta-logo.png"
@@ -62,17 +63,45 @@ export default function Navbar() {
             </Link>
           </div>
 
-          <div className="flex items-center space-x-4">
+          <div className="flex items-center">
             {session ? (
-              <>
-                <HamburgerMenu />
+              <div className="flex flex-col items-end pt-8">
+                <button
+                  onClick={() => setIsMenuOpen(!isMenuOpen)}
+                  className="text-white hover:text-teal-500 transition-colors mb-3"
+                >
+                  <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                  </svg>
+                </button>
+
                 <button
                   onClick={() => signOut()}
-                  className="text-sm text-gray-300 hover:text-white"
+                  className="text-sm text-gray-300 hover:text-white mb-2"
                 >
                   Sign Out
                 </button>
-              </>
+
+                {session?.user?.email && (
+                  <p className="text-sm text-gray-400">Logged in as: {session.user.email}</p>
+                )}
+
+                {/* Dropdown Menu */}
+                {isMenuOpen && (
+                  <div className="absolute right-0 top-24 mt-2 w-48 bg-gray-900 rounded-lg shadow-lg py-2 z-50">
+                    <Link href="/dashboard">
+                      <span className="block px-4 py-2 text-white hover:bg-gray-800 cursor-pointer">
+                        Dashboard
+                      </span>
+                    </Link>
+                    <Link href="/settings">
+                      <span className="block px-4 py-2 text-white hover:bg-gray-800 cursor-pointer">
+                        Meeting Preferences
+                      </span>
+                    </Link>
+                  </div>
+                )}
+              </div>
             ) : (
               <Link
                 href="/api/auth/signin"
@@ -102,4 +131,4 @@ export default function Navbar() {
       />
     </nav>
   );
-} 
+}

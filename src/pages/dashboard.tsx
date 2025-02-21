@@ -5,6 +5,8 @@ import Image from "next/image";
 import Navbar from '../components/Navbar';
 import ConfirmationDialog from '../components/ConfirmationDialog';
 import CreateMeetiniForm from '../components/CreateMeetiniForm';
+import Link from 'next/link';
+import Toast from '../components/Toast';
 
 interface CalendarEvent {
   id: string;
@@ -56,6 +58,78 @@ export default function Dashboard() {
     action: () => {},
     type: 'warning'
   });
+
+  const [isListening, setIsListening] = useState(false);
+  const [prompt, setPrompt] = useState('');
+  const [showManualSetup, setShowManualSetup] = useState(false);
+  const [toast, setToast] = useState<{
+    show: boolean;
+    type: 'success' | 'error';
+    message: string;
+  }>({
+    show: false,
+    type: 'success',
+    message: '',
+  });
+
+  const showToast = (type: 'success' | 'error', message: string) => {
+    setToast({ show: true, type, message });
+    setTimeout(() => setToast({ show: false, type: 'success', message: '' }), 5000);
+  };
+
+  const stopListening = () => {
+    if (window.currentRecognition) {
+      window.currentRecognition.stop();
+      window.currentRecognition = null;
+    }
+    setIsListening(false);
+  };
+
+  const startListening = async () => {
+    if (!('webkitSpeechRecognition' in window)) {
+      setError('Speech recognition is not supported in your browser. Please use Chrome.');
+      return;
+    }
+
+    try {
+      if (isListening) {
+        stopListening();
+        return;
+      }
+
+      setIsListening(true);
+      setError(null);
+
+      const recognition = new window.webkitSpeechRecognition();
+      window.currentRecognition = recognition;
+      
+      recognition.continuous = true;
+      recognition.interimResults = true;
+
+      recognition.onresult = (event: any) => {
+        const transcript = Array.from(event.results)
+          .map((result: any) => result[0])
+          .map((result: any) => result.transcript)
+          .join('');
+        
+        setPrompt(transcript);
+      };
+
+      recognition.onerror = (event: any) => {
+        setError('Error occurred in recognition: ' + event.error);
+        stopListening();
+      };
+
+      recognition.onend = () => {
+        stopListening();
+      };
+
+      recognition.start();
+    } catch (error) {
+      setError('Failed to start voice recognition. Please try again.');
+      setIsListening(false);
+    }
+  };
 
   const fetchInvites = useCallback(async () => {
     try {
@@ -236,26 +310,110 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="min-h-screen bg-black text-white p-8">
+    <div className="min-h-screen bg-black text-white">
       <Navbar />
-      <div className="pt-40 max-w-4xl mx-auto space-y-12">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold">Welcome to Your Dashboard</h1>
-            {session?.user?.email && (
-              <p className="text-gray-400 mt-1">Logged in as: {session.user.email}</p>
+      <div className="max-w-6xl mx-auto px-4 pt-36">
+        <div className="mb-16">
+          <Link href="/settings">
+            <button className="px-6 py-2 bg-teal-500 text-white rounded-lg hover:bg-teal-600 transition-colors whitespace-nowrap">
+              Set Meetini's Meeting Preferences
+            </button>
+          </Link>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-16">
+          <div className="bg-gray-900 p-6 rounded-lg">
+            <h3 className="text-xl font-semibold text-white mb-4">Quick Create with AI</h3>
+            <p className="text-gray-400 mb-4">Just tell us what you want! We'll handle the scheduling based on everyone's availability.</p>
+            <div className="relative mb-4">
+              <input
+                type="text"
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                placeholder="Talk or Type Your Meeting Request"
+                className="w-full px-4 py-2 bg-gray-800 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
+              />
+              <button
+                onClick={isListening ? stopListening : startListening}
+                className="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-white"
+              >
+                {isListening ? (
+                  <span className="flex h-3 w-3">
+                    <span className="animate-ping absolute inline-flex h-3 w-3 rounded-full bg-red-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span>
+                  </span>
+                ) : (
+                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                  </svg>
+                )}
+              </button>
+            </div>
+            {prompt && (
+              <button
+                onClick={async () => {
+                  if (!session?.user?.email) {
+                    showToast('error', 'Please sign in to create a meeting');
+                    return;
+                  }
+
+                  try {
+                    const response = await fetch('/api/meetini/ai-create', {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                      },
+                      credentials: 'same-origin',
+                      body: JSON.stringify({ prompt }),
+                    });
+                    
+                    if (!response.ok) {
+                      const error = await response.json();
+                      throw new Error(error.error || 'Failed to create meetini');
+                    }
+                    
+                    setPrompt('');
+                    showToast('success', 'Your meeting request is being processed.');
+                  } catch (error) {
+                    console.error('Error creating meetini:', error);
+                    showToast('error', 'Failed to create meeting. Please try again.');
+                  }
+                }}
+                className="w-full px-6 py-2 bg-teal-500 text-white rounded-lg hover:bg-teal-600 transition-colors whitespace-nowrap"
+              >
+                Create Meetini
+              </button>
             )}
           </div>
-          <button
-            onClick={() => setIsCreateModalOpen(true)}
-            className="px-4 py-2 rounded-lg bg-teal-500 text-white hover:bg-teal-600 transition-colors text-sm font-medium"
-          >
-            Create New Meetini
-          </button>
+
+          <div className="bg-gray-900 p-6 rounded-lg">
+            <h3 className="text-xl font-semibold text-white mb-4">Manual Setup</h3>
+            <p className="text-gray-400 mb-4">Specify your preferences and let us find the perfect time that works for everyone.</p>
+            <button
+              onClick={() => setShowManualSetup(true)}
+              className="px-6 py-2 bg-teal-500 text-white rounded-lg hover:bg-teal-600 transition-colors whitespace-nowrap"
+            >
+              Start Manual Setup
+            </button>
+          </div>
         </div>
-        
+
+        {/* Manual Setup Modal */}
+        {showManualSetup && (
+          <CreateMeetiniForm
+            isOpen={true}
+            onClose={() => setShowManualSetup(false)}
+            onSuccess={() => {
+              setShowManualSetup(false);
+              showToast('success', 'Meeting created successfully.');
+            }}
+            initialPrompt=""
+            mode="manual"
+          />
+        )}
+
         {/* Calendar Events Section - Single Row Expandable */}
-        <div className="border border-gray-800 rounded-lg overflow-hidden">
+        <div className="border border-gray-800 rounded-lg overflow-hidden mb-16">
           <button
             className="w-full p-4 bg-gray-900 text-left font-medium text-teal-500 hover:bg-gray-800 transition-colors flex justify-between items-center"
             onClick={() => setExpandedEvents(prev => 
@@ -411,6 +569,7 @@ export default function Dashboard() {
           fetchInvites();
         }}
         initialPrompt={initialPrompt}
+        mode="manual"
       />
 
       <ConfirmationDialog
@@ -421,6 +580,14 @@ export default function Dashboard() {
         message={confirmDialog.message}
         type={confirmDialog.type}
       />
+
+      {/* Toast Component */}
+      <Toast
+        show={toast.show}
+        type={toast.type}
+        message={toast.message}
+        onClose={() => setToast({ ...toast, show: false })}
+      />
     </div>
   );
-} 
+}

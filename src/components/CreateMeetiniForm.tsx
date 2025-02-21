@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { isContactPickerSupported, selectContacts } from '@/lib/contacts';
 
-// Add at the top of the file, after the imports
 declare global {
   interface Window {
     recognition: any;
@@ -14,6 +13,7 @@ interface CreateMeetiniFormProps {
   onClose: () => void;
   onSuccess: () => void;
   initialPrompt?: string | null;
+  mode?: 'ai' | 'manual';
 }
 
 interface Contact {
@@ -42,8 +42,8 @@ interface FormData {
   };
 }
 
-export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialPrompt }: CreateMeetiniFormProps) {
-  const [creationMode, setCreationMode] = useState<'ai' | 'manual' | null>(initialPrompt ? 'ai' : null);
+export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialPrompt, mode }: CreateMeetiniFormProps) {
+  const [creationMode, setCreationMode] = useState<'ai' | 'manual' | null>(mode || (initialPrompt ? 'ai' : null));
   const [aiPrompt, setAiPrompt] = useState(initialPrompt || '');
   const [isListening, setIsListening] = useState(false);
   const [formData, setFormData] = useState<FormData>({
@@ -76,7 +76,6 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
   const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
   const [audioContext, setAudioContext] = useState<AudioContext | null>(null);
 
-  // Add effect to handle initialPrompt changes
   useEffect(() => {
     if (initialPrompt) {
       setCreationMode('ai');
@@ -415,7 +414,7 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
         <div className="relative bg-gray-900 rounded-lg p-6 max-w-2xl w-full border border-gray-800">
           <h2 className="text-xl font-semibold mb-6 text-teal-500">Create New Meetini</h2>
           
-          {!creationMode ? (
+          {creationMode === null ? (
             <div className="space-y-4">
               <p className="text-gray-300 mb-6">Choose how you'd like to create your Meetini:</p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -652,22 +651,15 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
                         type="date"
                         className="w-full p-2 rounded bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-teal-500"
                         min={new Date().toISOString().split('T')[0]}
+                        value={formData.proposedTimes[0]?.split('T')[0] || ''}
                         onChange={e => {
                           const selectedDate = e.target.value;
-                          const currentTime = formData.proposedTimes[0]?.split('T')[1];
+                          const currentTime = formData.proposedTimes[0]?.split('T')[1] || '12:00';
                           
-                          if (selectedDate && currentTime) {
-                            setFormData(prev => ({
-                              ...prev,
-                              proposedTimes: [`${selectedDate}T${currentTime}`]
-                            }));
-                          } else if (selectedDate) {
-                            // Store just the date part until time is selected
-                            setFormData(prev => ({
-                              ...prev,
-                              proposedTimes: [selectedDate]
-                            }));
-                          }
+                          setFormData(prev => ({
+                            ...prev,
+                            proposedTimes: [`${selectedDate}T${currentTime}`]
+                          }));
                         }}
                       />
                     </div>
@@ -676,16 +668,15 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
                       <input
                         type="time"
                         className="w-full p-2 rounded bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-teal-500"
+                        value={formData.proposedTimes[0]?.split('T')[1] || '12:00'}
                         onChange={e => {
                           const selectedTime = e.target.value;
-                          const currentDate = formData.proposedTimes[0]?.split('T')[0];
+                          const currentDate = formData.proposedTimes[0]?.split('T')[0] || new Date().toISOString().split('T')[0];
                           
-                          if (currentDate && selectedTime) {
-                            setFormData(prev => ({
-                              ...prev,
-                              proposedTimes: [`${currentDate}T${selectedTime}`]
-                            }));
-                          }
+                          setFormData(prev => ({
+                            ...prev,
+                            proposedTimes: [`${currentDate}T${selectedTime}`]
+                          }));
                         }}
                       />
                     </div>
@@ -693,16 +684,14 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
                   {formData.proposedTimes?.map((time, index) => (
                     <div key={index} className="flex items-center justify-between p-2 rounded bg-gray-800 border border-gray-700">
                       <span className="text-gray-300">
-                        {time.includes('T') 
-                          ? new Date(time).toLocaleString()
-                          : 'Select both date and time'}
+                        {new Date(time).toLocaleString()}
                       </span>
                       <button
                         type="button"
                         onClick={() => {
                           setFormData(prev => ({
                             ...prev,
-                            proposedTimes: prev.proposedTimes?.filter((_, i) => i !== index)
+                            proposedTimes: prev.proposedTimes.filter((_, i) => i !== index)
                           }));
                         }}
                         className="text-gray-400 hover:text-red-500 transition-colors"
