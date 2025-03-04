@@ -131,7 +131,7 @@ export default function Home() {
         // If not logged in, redirect to Google sign in
         await signIn("google", {
           callbackUrl: `/dashboard?prompt=${encodeURIComponent(prompt)}`,
-          scope: 'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/contacts.readonly email profile'
+          scope: 'openid email profile https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/contacts.readonly https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.metadata'
         });
         return;
       }

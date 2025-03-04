@@ -34,7 +34,7 @@ async function handler(req: ExtendedNextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'No challenge found' });
     }
 
-    const expectedOrigin = process.env.NEXTAUTH_URL || 'http://localhost:3000';
+    const expectedOrigin = process.env.NEXTAUTH_URL || 'http://localhost:3002';
     const expectedRPID = process.env.NEXTAUTH_URL ? new URL(process.env.NEXTAUTH_URL).hostname : 'localhost';
 
     let verification;
