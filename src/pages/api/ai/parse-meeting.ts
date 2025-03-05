@@ -1,8 +1,10 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import OpenAI from 'openai';
+import { searchEmailContacts } from '@/lib/google';
+import { extractNames } from '@/lib/nlp';
 
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY, // Note: No NEXT_PUBLIC_ prefix needed here
+  apiKey: process.env.OPENAI_API_KEY,
 });
 
 interface ParsedMeetingRequest {
@@ -23,29 +25,35 @@ function validateEmail(email: string): boolean {
   return re.test(email);
 }
 
-function processParticipants(participants: string[]): string[] {
-  return participants.map(participant => {
-    // If it's already an email, return it
-    if (validateEmail(participant)) return participant;
+async function resolveParticipants(req: NextApiRequest, participants: string[]): Promise<string[]> {
+  const resolvedParticipants: string[] = [];
+  
+  for (const participant of participants) {
+    // If it's already a valid email, use it
+    if (validateEmail(participant)) {
+      resolvedParticipants.push(participant);
+      continue;
+    }
     
-    // If it ends with @gmail.com, return it
-    if (participant.endsWith('@gmail.com')) return participant;
-    
-    // If it contains @ but is malformed, try to fix it
-    if (participant.includes('@')) {
-      const parts = participant.split('@');
-      if (parts.length === 2) {
-        return `${parts[0].trim()}@${parts[1].trim()}`;
+    // Search Gmail history for this name
+    try {
+      const contacts = await searchEmailContacts(req, [participant]);
+      if (contacts && contacts.length > 0) {
+        // Use the most confident match
+        const bestMatch = contacts[0];
+        resolvedParticipants.push(bestMatch.email);
+        continue;
       }
+    } catch (error) {
+      console.error('Error searching contacts:', error);
     }
     
-    // If it looks like a name or partial email, append @gmail.com
-    if (!participant.includes('@')) {
-      return `${participant.trim().toLowerCase().replace(/\s+/g, '')}@gmail.com`;
-    }
-    
-    return participant;
-  });
+    // Fallback: If no email found, construct a Gmail address
+    const gmailAddress = `${participant.trim().toLowerCase().replace(/\s+/g, '')}@gmail.com`;
+    resolvedParticipants.push(gmailAddress);
+  }
+  
+  return resolvedParticipants;
 }
 
 export default async function handler(
@@ -65,6 +73,10 @@ export default async function handler(
 
     console.log('Processing prompt:', prompt);
 
+    // First, extract potential names using our NLP utility
+    const extractedNames = extractNames(prompt);
+    console.log('Extracted names:', extractedNames);
+
     const completion = await openai.chat.completions.create({
       model: "gpt-4",
       messages: [
@@ -81,7 +93,9 @@ export default async function handler(
           - Location type (coffee/restaurant/office/virtual)
           - Specific location (if mentioned)
           - Priority (1-10)
-          - Additional notes/context`
+          - Additional notes/context
+          
+          Names already extracted from the prompt: ${extractedNames.join(', ')}`
         },
         {
           role: "user",
@@ -152,8 +166,8 @@ export default async function handler(
 
     const parsedArgs = JSON.parse(functionCall.arguments) as ParsedMeetingRequest;
     
-    // Process and validate participants
-    parsedArgs.participants = processParticipants(parsedArgs.participants);
+    // Resolve participants using Gmail history
+    parsedArgs.participants = await resolveParticipants(req, parsedArgs.participants);
 
     // Ensure we have required fields
     if (!parsedArgs.title || !parsedArgs.participants || !parsedArgs.preferences) {
@@ -176,4 +190,4 @@ export default async function handler(
       timestamp: new Date().toISOString()
     });
   }
-} 
+}

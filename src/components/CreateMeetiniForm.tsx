@@ -50,7 +50,7 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
     title: '',
     contacts: [],
     location: '',
-    proposedTimes: [],
+    proposedTimes: [new Date(new Date().setHours(new Date().getHours() + 1, 0, 0, 0)).toISOString()], // Default to next hour
     preferences: {
       timePreference: undefined,
       durationType: undefined,
@@ -171,9 +171,8 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
         proposedTimes: formData.proposedTimes.map(time => new Date(time).toISOString())
       };
 
-      setProcessingStatus('🚀 Sending invitations...');
+      console.log('Submitting request:', requestBody);
 
-      // Submit to API
       const response = await fetch('/api/meetini', {
         method: 'POST',
         headers: {
@@ -184,15 +183,11 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
         credentials: 'same-origin',
       });
 
-      // Check if response is JSON
-      const contentType = response.headers.get('content-type');
-      if (!contentType || !contentType.includes('application/json')) {
-        const textContent = await response.text();
-        console.error('Received non-JSON response:', textContent);
-        throw new Error('Server returned invalid response format');
-      }
+      console.log('Response status:', response.status);
+      console.log('Response headers:', Object.fromEntries(response.headers.entries()));
 
       const data = await response.json();
+      console.log('Response data:', data);
 
       if (!response.ok) {
         throw new Error(data.error || 'Failed to create invitation');

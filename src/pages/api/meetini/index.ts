@@ -49,8 +49,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!Array.isArray(contacts) || contacts.length === 0) {
         return res.status(400).json({ error: 'At least one contact is required' });
       }
+      
+      // If no proposed times, set default to next hour rounded up
       if (!Array.isArray(proposedTimes) || proposedTimes.length === 0) {
-        return res.status(400).json({ error: 'At least one proposed time is required' });
+        const now = new Date();
+        const nextHour = new Date(now.setHours(now.getHours() + 1, 0, 0, 0));
+        proposedTimes = [nextHour.toISOString()];
       }
 
       // Validate each contact
@@ -99,33 +103,47 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         });
 
-        // Send notifications
-        await sendNotifications(
-          invitation.participants.map((p: { 
-            email: string | null; 
-            phoneNumber: string | null; 
-            name: string | null;
-            notifyByEmail: boolean;
-            notifyBySms: boolean;
-          }) => ({
-            email: p.email || undefined,
-            phoneNumber: p.phoneNumber || undefined,
-            name: p.name || undefined,
-            notifyByEmail: p.notifyByEmail,
-            notifyBySms: p.notifyBySms
-          })),
-          {
-            type: 'invitation',
-            title: invitation.title,
-            creatorName: token.name || token.email,
-            creatorEmail: token.email,
-            proposedTimes: invitation.proposedTimes.map((time: Date) => time.toISOString()),
-            location: invitation.location || undefined,
-            invitationId: invitation.id
-          }
-        );
+        console.log('Created invitation:', invitation);
 
-        return res.status(200).json(invitation);
+        // Send notifications
+        try {
+          await sendNotifications(
+            invitation.participants.map((p: { 
+              email: string | null; 
+              phoneNumber: string | null; 
+              name: string | null;
+              notifyByEmail: boolean;
+              notifyBySms: boolean;
+            }) => ({
+              email: p.email || undefined,
+              phoneNumber: p.phoneNumber || undefined,
+              name: p.name || undefined,
+              notifyByEmail: p.notifyByEmail,
+              notifyBySms: p.notifyBySms
+            })),
+            {
+              type: 'invitation',
+              title: invitation.title,
+              creatorName: token.name || token.email,
+              creatorEmail: token.email,
+              proposedTimes: invitation.proposedTimes.map((time: Date) => time.toISOString()),
+              location: invitation.location || undefined,
+              invitationId: invitation.id
+            }
+          );
+          console.log('All notifications sent successfully');
+        } catch (notifyError) {
+          console.error('Notification error:', notifyError);
+          // Don't fail the request if notifications partially failed
+          // The invitation was still created successfully
+        }
+
+        // Set response headers explicitly
+        res.setHeader('Content-Type', 'application/json');
+        return res.status(200).json({
+          success: true,
+          invitation
+        });
       } catch (dbError) {
         console.error('Database or notification error:', dbError);
         return res.status(500).json({ 

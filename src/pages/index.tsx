@@ -42,6 +42,11 @@ interface ParsedRequest {
   };
 }
 
+interface EmailContact {
+  name: string;
+  email: string;
+}
+
 export default function Home() {
   const { data: session, status } = useSession();
   const router = useRouter();
@@ -79,6 +84,8 @@ export default function Home() {
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
   const [audioContext, setAudioContext] = useState<AudioContext | null>(null);
+  const [suggestedContacts, setSuggestedContacts] = useState<EmailContact[]>([]);
+  const [isSearchingContacts, setIsSearchingContacts] = useState(false);
 
   useEffect(() => {
     const checkBiometrics = async () => {
@@ -107,6 +114,44 @@ export default function Home() {
     };
   }, [isListening]);
 
+  const searchContactSuggestions = async (text: string) => {
+    if (!text.trim()) {
+      setSuggestedContacts([]);
+      return;
+    }
+
+    try {
+      setIsSearchingContacts(true);
+      const response = await fetch('/api/contacts/suggest', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ text }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to get contact suggestions');
+      }
+
+      const { contacts } = await response.json();
+      setSuggestedContacts(contacts);
+    } catch (error) {
+      console.error('Error getting contact suggestions:', error);
+    } finally {
+      setIsSearchingContacts(false);
+    }
+  };
+
+  // Debounce the search to avoid too many requests
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      searchContactSuggestions(prompt);
+    }, 300); // Wait 300ms after last keystroke
+
+    return () => clearTimeout(timer);
+  }, [prompt]);
+
   if (status === 'loading') {
     return (
       <div className="min-h-screen bg-black text-white flex items-center justify-center">
@@ -131,7 +176,6 @@ export default function Home() {
         // If not logged in, redirect to Google sign in
         await signIn("google", {
           callbackUrl: `/dashboard?prompt=${encodeURIComponent(prompt)}`,
-          scope: 'openid email profile https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/contacts.readonly https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.metadata'
         });
         return;
       }
@@ -245,6 +289,8 @@ export default function Home() {
           const transcript = event.results[i][0].transcript;
           if (event.results[i].isFinal) {
             finalTranscript += transcript + ' ';
+            // Search for contacts when we have final transcript
+            searchContactSuggestions(finalTranscript);
           } else {
             interimTranscript += transcript;
           }
@@ -378,7 +424,10 @@ export default function Home() {
             <div className="relative">
               <textarea
                 value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
+                onChange={(e) => {
+                  setPrompt(e.target.value);
+                  // Contact search is handled by the useEffect
+                }}
                 onKeyPress={handleKeyPress}
                 placeholder="Simply tell us what to schedule and with whom. Talk/Type and we'll eliminate the back and forth of setting meetings, events or get togethers. We call it a meetini."
                 className="w-full p-3 pr-12 rounded-lg bg-gray-900 border border-gray-800 text-white focus:outline-none focus:border-teal-500 resize-none text-sm sm:text-base"
@@ -422,6 +471,42 @@ export default function Home() {
             {error && (
               <div className="p-3 bg-red-500/10 border border-red-500 rounded text-red-500 text-sm">
                 {error}
+              </div>
+            )}
+
+            {/* Contact Suggestions */}
+            {isSearchingContacts && (
+              <div className="text-sm text-gray-400">
+                Searching contacts...
+              </div>
+            )}
+            {suggestedContacts.length > 0 && (
+              <div className="mt-2 space-y-2">
+                <div className="text-sm text-gray-400">
+                  Suggested contacts:
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {suggestedContacts.map((contact) => (
+                    <button
+                      key={contact.email}
+                      onClick={() => {
+                        // Replace the name in the prompt with the full email
+                        const newPrompt = prompt.replace(
+                          contact.name,
+                          `${contact.name} <${contact.email}>`
+                        );
+                        setPrompt(newPrompt);
+                        setSuggestedContacts([]); // Clear suggestions
+                      }}
+                      className="px-3 py-1 text-sm bg-gray-800 hover:bg-gray-700 rounded-full flex items-center gap-2 group"
+                    >
+                      <span className="text-white">{contact.name}</span>
+                      <span className="text-gray-400 group-hover:text-gray-300">
+                        {contact.email}
+                      </span>
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
 

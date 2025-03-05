@@ -40,11 +40,17 @@ export async function sendNotifications(
     .filter(r => r.notifyBySms && r.phoneNumber)
     .map(recipient => sendSMS(recipient, data));
 
-  try {
-    await Promise.all([...emailPromises, ...smsPromises]);
-  } catch (error) {
-    console.error('Failed to send notifications:', error);
-    throw error;
+  // Wait for all notifications to complete
+  const results = await Promise.allSettled([...emailPromises, ...smsPromises]);
+  
+  // Check for any failures
+  const failures = results.filter(r => r.status === 'rejected');
+  if (failures.length > 0) {
+    console.error('Some notifications failed:', failures);
+    // Don't throw error if at least one notification succeeded
+    if (failures.length === results.length) {
+      throw new Error('Failed to send notifications');
+    }
   }
 }
 
@@ -56,12 +62,14 @@ async function sendEmail(
   console.log('Environment check:', {
     NODE_ENV: process.env.NODE_ENV,
     RESEND_API_KEY_LENGTH: process.env.RESEND_API_KEY?.length,
+    RESEND_FROM_EMAIL: process.env.RESEND_FROM_EMAIL,
     NEXTAUTH_URL: process.env.NEXTAUTH_URL
   });
   
   if (!process.env.RESEND_API_KEY) {
-    console.warn('Email notifications are disabled: Resend API key not configured');
-    return;
+    const error = new Error('Email notifications are disabled: Resend API key not configured');
+    console.error(error);
+    throw error; 
   }
 
   // Create a fresh Resend client for each email
@@ -91,7 +99,7 @@ DTSTART:${startTime.toISOString().replace(/[-:.]/g, '').replace(/\d{3}Z$/, 'Z')}
 DTEND:${endTime.toISOString().replace(/[-:.]/g, '').replace(/\d{3}Z$/, 'Z')}
 SUMMARY:${data.title}
 ${data.location ? `LOCATION:${data.location}` : ''}
-ORGANIZER;CN=${data.creatorName || 'Meetini'}:mailto:${data.creatorEmail || 'notifications@meetini.ai'}
+ORGANIZER;CN=${data.creatorName || 'Meetini'}:mailto:${data.creatorEmail || process.env.RESEND_FROM_EMAIL || 'notifications@meetini.ai'}
 ATTENDEE;PARTSTAT=NEEDS-ACTION;ROLE=REQ-PARTICIPANT;RSVP=TRUE:mailto:${recipient.email}
 END:VEVENT
 END:VCALENDAR`;
@@ -104,7 +112,7 @@ END:VCALENDAR`;
     }
 
     const emailPayload = {
-      from: 'Meetini <notifications@meetini.ai>',
+      from: process.env.RESEND_FROM_EMAIL || 'Meetini <notifications@meetini.ai>',
       to: recipient.email,
       subject,
       html,
@@ -134,6 +142,10 @@ END:VCALENDAR`;
       timestamp: new Date().toISOString()
     });
 
+    if (!result?.id) {
+      throw new Error('Failed to send email - no confirmation ID received');
+    }
+
     console.log('Email sent successfully to:', recipient.email);
   } catch (error) {
     console.error('Failed to send email:', {
@@ -145,7 +157,7 @@ END:VCALENDAR`;
         stack: error instanceof Error ? error.stack : undefined
       }
     });
-    throw error;
+    throw error; 
   } finally {
     console.log('=== Email Sending Process Completed ===');
   }
@@ -426,19 +438,21 @@ function generateSMSTemplate(
 
 export async function sendEmailNotification(to: string, subject: string, content: string) {
   if (!process.env.RESEND_API_KEY) {
-    console.warn('Email notifications are disabled: Resend API key not configured');
-    return;
+    const error = new Error('Email notifications are disabled: Resend API key not configured');
+    console.error(error);
+    throw error; 
   }
   
   try {
     const resend = new Resend(process.env.RESEND_API_KEY);
     await resend.emails.send({
-      from: 'Meetini <notifications@meetini.ai>',
+      from: process.env.RESEND_FROM_EMAIL || 'Meetini <notifications@meetini.ai>',
       to,
       subject,
       html: content,
     });
   } catch (error) {
     console.error('Failed to send email notification:', error);
+    throw error; 
   }
 } 
