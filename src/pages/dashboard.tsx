@@ -61,6 +61,9 @@ export default function Dashboard() {
 
   const [isListening, setIsListening] = useState(false);
   const [prompt, setPrompt] = useState('');
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [suggestedContacts, setSuggestedContacts] = useState([]);
+  const [meetingType, setMeetingType] = useState<{ type: string | undefined; confidence: number }>({ type: undefined, confidence: 0 });
   const [showManualSetup, setShowManualSetup] = useState(false);
   const [toast, setToast] = useState<{
     show: boolean;
@@ -130,6 +133,59 @@ export default function Dashboard() {
       setIsListening(false);
     }
   };
+
+  function debounce(func: Function, wait: number) {
+    let timeout: NodeJS.Timeout;
+    return function (...args: any[]) {
+      clearTimeout(timeout);
+      timeout = setTimeout(() => {
+        func.apply(this, args);
+      }, wait);
+    };
+  }
+
+  const debouncedSearchContacts = useCallback(
+    debounce(async (text: string) => {
+      if (!text?.trim()) {
+        setSuggestedContacts([]);
+        return;
+      }
+
+      try {
+        console.log('Searching contacts for:', text);
+        const response = await fetch(`/api/contacts/search?q=${encodeURIComponent(text)}`, {
+          credentials: 'include'
+        });
+
+        const data = await response.json();
+        
+        if (!response.ok) {
+          console.error('Contact search failed:', {
+            status: response.status,
+            statusText: response.statusText,
+            error: data
+          });
+          const errorMessage = data.error || data.message || 'Failed to search Gmail contacts';
+          throw new Error(errorMessage);
+        }
+
+        console.log('Contact search succeeded:', data);
+        setSuggestedContacts(data.contacts || []);
+      } catch (error) {
+        console.error('Error searching contacts:', error);
+        const errorMessage = error instanceof Error ? error.message : 'Failed to search contacts';
+        setError(errorMessage);
+        setSuggestedContacts([]);
+      }
+    }, 300),
+    []
+  );
+
+  useEffect(() => {
+    debouncedSearchContacts(prompt);
+    const type = detectMeetingType(prompt);
+    setMeetingType(type);
+  }, [prompt, debouncedSearchContacts]);
 
   const fetchInvites = useCallback(async () => {
     try {
@@ -324,40 +380,82 @@ export default function Dashboard() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-16">
           <div className="bg-gray-900 p-6 rounded-lg">
             <h3 className="text-xl font-semibold text-white mb-4">Quick Create with AI</h3>
-            <p className="text-gray-400 mb-4">Just tell us what you want! We'll handle the scheduling based on everyone's availability.</p>
-            <div className="relative mb-4">
-              <input
-                type="text"
+            <p className="text-gray-400 mb-4">Just tell me what kind of meeting you want to schedule and I'll take care of the rest.</p>
+            
+            <div className="relative">
+              <textarea
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
-                placeholder="Talk or Type Your Meeting Request"
-                className="w-full px-4 py-2 bg-gray-800 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
+                placeholder="e.g. Schedule a coffee meeting with John tomorrow morning"
+                className="w-full p-4 bg-gray-800 text-white rounded-lg mb-4 min-h-[100px]"
+                disabled={isProcessing}
               />
+              
               <button
-                onClick={isListening ? stopListening : startListening}
-                className="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-white"
+                onClick={startListening}
+                className={`absolute top-2 right-2 p-2 rounded-full ${
+                  isListening ? 'bg-red-500' : 'bg-teal-500'
+                } hover:opacity-80 transition-colors`}
+                disabled={isProcessing}
               >
-                {isListening ? (
-                  <span className="flex h-3 w-3">
-                    <span className="animate-ping absolute inline-flex h-3 w-3 rounded-full bg-red-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span>
-                  </span>
-                ) : (
-                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                  </svg>
-                )}
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                </svg>
               </button>
             </div>
-            {prompt && (
+
+            {/* Show contact suggestions */}
+            {suggestedContacts.length > 0 && !isProcessing && (
+              <div className="mb-4">
+                <h4 className="text-sm font-medium text-gray-400 mb-2">Found in your Gmail history:</h4>
+                <div className="flex flex-wrap gap-2">
+                  {suggestedContacts.map((contact) => (
+                    <div
+                      key={contact.email}
+                      className="px-3 py-1 bg-gray-800 rounded-full text-sm text-white flex items-center gap-2"
+                    >
+                      <span>{contact.name}</span>
+                      <span className="text-gray-400 text-xs">({Math.round(contact.confidence * 100)}%)</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Show detected meeting type */}
+            {meetingType.type && !isProcessing && (
+              <div className="mb-4">
+                <h4 className="text-sm font-medium text-gray-400 mb-2">Detected meeting type:</h4>
+                <div className="px-3 py-1 bg-gray-800 rounded-full text-sm text-white inline-flex items-center gap-2">
+                  <span className="capitalize">{meetingType.type.replace('-', ' ')}</span>
+                  <span className="text-gray-400 text-xs">({Math.round(meetingType.confidence * 100)}%)</span>
+                </div>
+              </div>
+            )}
+
+            {/* Ask for meeting type if we detect names but no type */}
+            {suggestedContacts.length > 0 && !meetingType.type && !isProcessing && (
+              <div className="mb-4">
+                <h4 className="text-sm font-medium text-gray-400 mb-2">What type of meeting would you like?</h4>
+                <div className="flex flex-wrap gap-2">
+                  {['in-person', 'virtual', 'phone'].map((type) => (
+                    <button
+                      key={type}
+                      onClick={() => setPrompt(prev => `${prev} (${type} meeting)`)}
+                      className="px-3 py-1 bg-gray-800 rounded-full text-sm text-white hover:bg-gray-700 transition-colors"
+                    >
+                      <span className="capitalize">{type.replace('-', ' ')}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {!isProcessing && prompt && (
               <button
                 onClick={async () => {
-                  if (!session?.user?.email) {
-                    showToast('error', 'Please sign in to create a meeting');
-                    return;
-                  }
-
                   try {
+                    setIsProcessing(true);
                     const response = await fetch('/api/meetini/ai-create', {
                       method: 'POST',
                       headers: {
@@ -374,15 +472,24 @@ export default function Dashboard() {
                     
                     setPrompt('');
                     showToast('success', 'Your meeting request is being processed.');
+                    await fetchInvites(); // Refresh the invites list
                   } catch (error) {
                     console.error('Error creating meetini:', error);
-                    showToast('error', 'Failed to create meeting. Please try again.');
+                    showToast('error', error instanceof Error ? error.message : 'Failed to create meeting. Please try again.');
+                  } finally {
+                    setIsProcessing(false);
                   }
                 }}
                 className="w-full px-6 py-2 bg-teal-500 text-white rounded-lg hover:bg-teal-600 transition-colors whitespace-nowrap"
               >
                 Create Meetini
               </button>
+            )}
+
+            {isProcessing && (
+              <div className="w-full flex items-center justify-center py-2">
+                <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-teal-500"></div>
+              </div>
             )}
           </div>
 
@@ -590,4 +697,10 @@ export default function Dashboard() {
       />
     </div>
   );
+}
+
+function detectMeetingType(prompt: string) {
+  // Implement your meeting type detection logic here
+  // For now, just return a dummy value
+  return { type: 'in-person', confidence: 0.8 };
 }

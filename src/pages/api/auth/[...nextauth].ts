@@ -1,5 +1,6 @@
 import NextAuth, { AuthOptions } from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
+import { google } from "googleapis";
 import { prisma } from "@/lib/prisma";
 
 declare module "next-auth" {
@@ -26,21 +27,17 @@ export const authOptions: AuthOptions = {
       clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
       authorization: {
         params: {
-          prompt: "consent",
-          access_type: "offline",
-          response_type: "code",
-          include_granted_scopes: true,
           scope: [
-            "openid",
-            "email",
-            "profile",
-            "https://www.googleapis.com/auth/calendar.readonly",
-            "https://mail.google.com/",
-            "https://www.googleapis.com/auth/gmail.readonly",
-            "https://www.googleapis.com/auth/gmail.metadata"
-          ].join(" ")
-        },
-      },
+            'openid',
+            'email',
+            'profile',
+            'https://www.googleapis.com/auth/calendar',  // Full calendar access
+            'https://www.googleapis.com/auth/gmail.readonly'  // Read-only Gmail access
+          ].join(' '),
+          prompt: 'consent',
+          access_type: 'offline'  // Needed for refresh tokens
+        }
+      }
     }),
   ],
   session: {
@@ -76,40 +73,66 @@ export const authOptions: AuthOptions = {
         return false;
       }
     },
-    async jwt({ token, account, user }) {
+    async jwt({ token, account, profile }) {
       // Initial sign in
-      if (account && user) {
+      if (account && profile) {
         return {
-          ...token,
           accessToken: account.access_token,
+          accessTokenExpires: Date.now() + (account.expires_in! * 1000),
           refreshToken: account.refresh_token,
-          accessTokenExpires: account.expires_at ? account.expires_at * 1000 : undefined,
+          user: profile,
+          email: profile.email,
         };
       }
 
       // Return previous token if the access token has not expired yet
-      if (token.accessTokenExpires && Date.now() < token.accessTokenExpires) {
+      if (Date.now() < token.accessTokenExpires) {
         return token;
       }
 
       // Access token has expired, try to update it
-      return {
-        ...token,
-        error: "RefreshAccessTokenError",
-      };
+      try {
+        const response = await fetch('https://oauth2.googleapis.com/token', {
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            client_id: process.env.GOOGLE_CLIENT_ID!,
+            client_secret: process.env.GOOGLE_CLIENT_SECRET!,
+            grant_type: 'refresh_token',
+            refresh_token: token.refreshToken,
+          }),
+          method: 'POST',
+        });
+
+        const tokens = await response.json();
+
+        if (!response.ok) throw tokens;
+
+        return {
+          ...token,
+          accessToken: tokens.access_token,
+          accessTokenExpires: Date.now() + (tokens.expires_in * 1000),
+          // Fall back to old refresh token, but use new if available
+          refreshToken: tokens.refresh_token ?? token.refreshToken,
+        };
+      } catch (error) {
+        console.error('Error refreshing access token', error);
+        return {
+          ...token,
+          error: 'RefreshAccessTokenError',
+        };
+      }
     },
     async session({ session, token }) {
-      if (token) {
-        session.accessToken = token.accessToken as string;
-        session.refreshToken = token.refreshToken as string;
-        session.error = token.error;
-      }
+      session.accessToken = token.accessToken;
+      session.error = token.error;
+      session.accessTokenExpires = token.accessTokenExpires;
+      session.refreshToken = token.refreshToken;
       return session;
-    },
+    }
   },
   secret: process.env.NEXTAUTH_SECRET,
   pages: {
-    signIn: '/',
+    signIn: '/auth/signin',
     error: '/',
   },
   debug: process.env.NODE_ENV === 'development',

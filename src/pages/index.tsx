@@ -122,13 +122,7 @@ export default function Home() {
 
     try {
       setIsSearchingContacts(true);
-      const response = await fetch('/api/contacts/suggest', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ text }),
-      });
+      const response = await fetch(`/api/contacts/search?q=${encodeURIComponent(text)}`);
 
       if (!response.ok) {
         throw new Error('Failed to get contact suggestions');
