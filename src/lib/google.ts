@@ -47,6 +47,97 @@ function buildEmailQuery(names: string[]): string {
   return queryParts.join(' OR ');
 }
 
+// Merge similar contacts and update their confidence scores
+function mergeAndScoreContacts(contacts: EmailContact[], names: string[]): EmailContact[] {
+  const mergedMap = new Map<string, EmailContact>();
+  
+  contacts.forEach(contact => {
+    const normalizedEmail = contact.email.toLowerCase();
+    const existing = mergedMap.get(normalizedEmail);
+    
+    if (existing) {
+      // Merge with existing contact
+      existing.frequency += contact.frequency;
+      if (contact.lastContact && (!existing.lastContact || contact.lastContact > existing.lastContact)) {
+        existing.lastContact = contact.lastContact;
+      }
+      // Keep the name with better matching score
+      const existingNameScore = getNameMatchScore(existing.name, names);
+      const newNameScore = getNameMatchScore(contact.name, names);
+      if (newNameScore > existingNameScore) {
+        existing.name = contact.name;
+      }
+    } else {
+      mergedMap.set(normalizedEmail, { ...contact });
+    }
+  });
+
+  return Array.from(mergedMap.values())
+    .map(contact => {
+      // Frequency score (max out at 10 emails)
+      const frequencyScore = Math.min(contact.frequency / 10, 1);
+      
+      // Recency score (full score for emails in last 24 hours, decreasing over 30 days)
+      const recencyScore = contact.lastContact 
+        ? Math.max(0, 1 - (Date.now() - contact.lastContact.getTime()) / (30 * 24 * 60 * 60 * 1000))
+        : 0;
+
+      // Name matching score with higher weight
+      const nameMatchScore = getNameMatchScore(contact.name, names);
+
+      // Final confidence score with adjusted weights
+      contact.confidence = (
+        nameMatchScore * 0.5 + // 50% weight on name matching
+        frequencyScore * 0.3 + // 30% weight on frequency
+        recencyScore * 0.2    // 20% weight on recency
+      );
+
+      return contact;
+    })
+    .sort((a, b) => b.confidence - a.confidence)
+    .filter(contact => contact.confidence > 0.1) // Filter out very low confidence matches
+    .slice(0, 5); // Only return top 5 matches
+}
+
+// Helper function to calculate name match score
+function getNameMatchScore(contactName: string, searchNames: string[]): number {
+  return Math.max(
+    ...searchNames.map(searchName => {
+      const searchParts = searchName.toLowerCase().split(' ');
+      const contactParts = contactName.toLowerCase().split(' ');
+      
+      // Exact match gets full score
+      if (searchName.toLowerCase() === contactName.toLowerCase()) {
+        return 1;
+      }
+      
+      // Calculate partial matches with position weighting
+      let totalScore = 0;
+      let matchedParts = 0;
+      
+      searchParts.forEach((searchPart, index) => {
+        const bestMatch = Math.max(
+          ...contactParts.map(contactPart => {
+            if (contactPart === searchPart) return 1;
+            if (contactPart.includes(searchPart)) return 0.8;
+            if (searchPart.includes(contactPart)) return 0.6;
+            return 0;
+          })
+        );
+        
+        if (bestMatch > 0) {
+          // Weight matches by position (earlier parts are more important)
+          totalScore += bestMatch * (1 - index * 0.2);
+          matchedParts++;
+        }
+      });
+      
+      // Consider the ratio of matched parts and their scores
+      return (totalScore / searchParts.length) * (matchedParts / Math.max(searchParts.length, contactParts.length));
+    })
+  );
+}
+
 export async function searchEmailContacts(req: NextApiRequest, names: string[]): Promise<EmailContact[]> {
   try {
     // Check cache first
@@ -155,48 +246,8 @@ export async function searchEmailContacts(req: NextApiRequest, names: string[]):
         }
       }
 
-      // Calculate confidence scores
-      const results = Array.from(contactsMap.values())
-        .map(contact => {
-          // Frequency score (max out at 10 emails)
-          const frequencyScore = Math.min(contact.frequency / 10, 1);
-          
-          // Recency score (full score for emails in last 24 hours, decreasing over 30 days)
-          const recencyScore = contact.lastContact 
-            ? Math.max(0, 1 - (Date.now() - contact.lastContact.getTime()) / (30 * 24 * 60 * 60 * 1000))
-            : 0;
-
-          // Name matching score
-          const nameMatchScore = Math.max(
-            ...names.map(searchName => {
-              const searchParts = searchName.toLowerCase().split(' ');
-              const contactParts = contact.name.toLowerCase().split(' ');
-              
-              // Exact match gets full score
-              if (searchName.toLowerCase() === contact.name.toLowerCase()) return 1;
-              
-              // Partial matches
-              const matchingParts = searchParts.filter(part => 
-                contactParts.some(contactPart => 
-                  contactPart.includes(part) || part.includes(contactPart)
-                )
-              );
-              
-              return matchingParts.length / Math.max(searchParts.length, contactParts.length);
-            })
-          );
-
-          // Final confidence score
-          contact.confidence = (
-            frequencyScore * 0.4 + // 40% weight on frequency
-            recencyScore * 0.3 + // 30% weight on recency
-            nameMatchScore * 0.3 // 30% weight on name matching
-          );
-
-          return contact;
-        })
-        .sort((a, b) => b.confidence - a.confidence)
-        .slice(0, 10); // Only return top 10 matches
+      // Process results through the new merging and scoring system
+      const results = mergeAndScoreContacts(Array.from(contactsMap.values()), names);
 
       // Cache results
       searchCache.set(cacheKey, {
@@ -204,12 +255,10 @@ export async function searchEmailContacts(req: NextApiRequest, names: string[]):
         results
       });
 
-      console.log(`Returning ${results.length} contacts with scores`);
       return results;
-
     } catch (error) {
-      console.error('Gmail API error:', error);
-      throw new Error('Failed to search Gmail messages: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      console.error('Error searching contacts:', error);
+      throw error;
     }
   } catch (error) {
     console.error('Email search error:', error);

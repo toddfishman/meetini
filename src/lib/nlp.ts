@@ -109,41 +109,64 @@ export function extractNames(text: string): string[] {
   const words = text.split(/\s+/).map(w => w.trim());
   const names: string[] = [];
   let currentName: string[] = [];
+  let inNameSequence = false;
 
   for (let i = 0; i < words.length; i++) {
     const word = words[i];
     const cleanWord = word.replace(/[.,!?]$/, ''); // Remove trailing punctuation
+    const lowerWord = cleanWord.toLowerCase();
     
     // Skip empty words or very short words
     if (cleanWord.length <= 1) continue;
 
-    // Skip common words and words that look like times (e.g., "9am", "10:30")
+    // Check for name indicators
+    const isNameIndicator = ['with', 'and', '@', 'for'].includes(lowerWord);
+    const nextWord = i < words.length - 1 ? words[i + 1] : '';
+    
+    // Start name sequence if we see an indicator
+    if (isNameIndicator && nextWord) {
+      if (currentName.length > 0) {
+        names.push(currentName.join(' '));
+        currentName = [];
+      }
+      inNameSequence = true;
+      continue;
+    }
+
+    // Skip common words and words that look like times
     if (
-      COMMON_WORDS.has(cleanWord.toLowerCase()) ||
+      (!inNameSequence && COMMON_WORDS.has(lowerWord)) ||
       /^\d{1,2}(:\d{2})?([ap]m)?$/i.test(cleanWord)
     ) {
       if (currentName.length > 0) {
         names.push(currentName.join(' '));
         currentName = [];
       }
+      inNameSequence = false;
       continue;
     }
 
-    // If it's not a common word and not a time, it might be a name
-    // We'll be more lenient about capitalization
+    // If it's capitalized or we're in a name sequence
     if (
-      // Either it starts with a capital letter
       cleanWord[0] === cleanWord[0].toUpperCase() ||
-      // Or it's in the middle of what looks like a name
-      currentName.length > 0 ||
-      // Or it's preceded by "with", "and", or "@"
-      (i > 0 && ['with', 'and', '@'].includes(words[i - 1].toLowerCase()))
+      inNameSequence ||
+      currentName.length > 0
     ) {
       currentName.push(cleanWord);
-    } else if (currentName.length > 0) {
-      // End of a potential name sequence
-      names.push(currentName.join(' '));
-      currentName = [];
+      
+      // If next word is a common word or punctuation, end the name
+      const nextWordLower = nextWord.toLowerCase().replace(/[.,!?]$/, '');
+      if (
+        !nextWord ||
+        COMMON_WORDS.has(nextWordLower) ||
+        ['and', 'with', '@', 'for'].includes(nextWordLower)
+      ) {
+        if (currentName.length > 0) {
+          names.push(currentName.join(' '));
+          currentName = [];
+        }
+        inNameSequence = false;
+      }
     }
   }
 
@@ -152,5 +175,8 @@ export function extractNames(text: string): string[] {
     names.push(currentName.join(' '));
   }
 
-  return [...new Set(names)]; // Remove duplicates
+  // Remove duplicates and very short names
+  return [...new Set(names)]
+    .filter(name => name.length > 2)
+    .map(name => name.trim());
 }
