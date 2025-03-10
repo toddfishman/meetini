@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/router";
 import Image from "next/image";
@@ -33,6 +33,22 @@ interface MeetiniInvite {
   createdBy: string;
 }
 
+interface Contact {
+  name: string;
+  email: string;
+  frequency: number;
+  lastContact?: Date;
+  confidence: number;
+  matchedName?: string;
+}
+
+interface MeetingSummary {
+  contacts: Contact[];
+  type?: string;
+  confidence: number;
+  suggestedTimes?: string[];
+}
+
 export default function Dashboard() {
   const { data: session, status } = useSession();
   const router = useRouter();
@@ -61,9 +77,11 @@ export default function Dashboard() {
 
   const [isListening, setIsListening] = useState(false);
   const [prompt, setPrompt] = useState('');
+  const previousPrompt = useRef(prompt);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [suggestedContacts, setSuggestedContacts] = useState([]);
+  const [selectedContacts, setSelectedContacts] = useState<Set<string>>(new Set());
   const [meetingType, setMeetingType] = useState<{ type: string | undefined; confidence: number }>({ type: undefined, confidence: 0 });
+  const [meetingSummary, setMeetingSummary] = useState<MeetingSummary | null>(null);
   const [showManualSetup, setShowManualSetup] = useState(false);
   const [toast, setToast] = useState<{
     show: boolean;
@@ -144,47 +162,87 @@ export default function Dashboard() {
     };
   }
 
+  const processSearchResults = async (query: string) => {
+    try {
+      setIsProcessing(true);
+      setError(null);
+
+      const response = await fetch(`/api/contacts/search?q=${encodeURIComponent(query)}`);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to search contacts');
+      }
+
+      if (data.contacts) {
+        // Flatten all contact results while maintaining uniqueness by email
+        const allContacts = Object.values(data.contacts)
+          .flat()
+          .filter((contact: any, index: number, self: any[]) => 
+            index === self.findIndex((c: any) => c.email === contact.email)
+          );
+
+        const detectedType = detectMeetingType(query);
+        
+        // Update meeting summary with all found contacts
+        setMeetingSummary(prev => ({
+          ...prev,
+          contacts: allContacts,
+          type: detectedType.type,
+          confidence: detectedType.confidence
+        }));
+
+        // Update selected contacts
+        const newSelectedContacts = new Set(selectedContacts);
+        allContacts.forEach((contact: any) => {
+          if (contact.confidence >= 0.9) { // Auto-select high confidence matches
+            newSelectedContacts.add(contact.email);
+          }
+        });
+        setSelectedContacts(newSelectedContacts);
+      }
+    } catch (error) {
+      console.error('Error searching contacts:', error);
+      setError(error instanceof Error ? error.message : 'Failed to search contacts');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const toggleContactSelection = (email: string) => {
+    const newSelectedContacts = new Set(selectedContacts);
+    if (newSelectedContacts.has(email)) {
+      newSelectedContacts.delete(email);
+    } else {
+      newSelectedContacts.add(email);
+    }
+    setSelectedContacts(newSelectedContacts);
+  };
+
   const debouncedSearchContacts = useCallback(
     debounce(async (text: string) => {
-      if (!text?.trim()) {
-        setSuggestedContacts([]);
+      if (!text?.trim() || text === previousPrompt.current) {
         return;
       }
+      previousPrompt.current = text;
 
-      try {
-        console.log('Searching contacts for:', text);
-        const response = await fetch(`/api/contacts/search?q=${encodeURIComponent(text)}`, {
-          credentials: 'include'
-        });
-
-        const data = await response.json();
-        
-        if (!response.ok) {
-          console.error('Contact search failed:', {
-            status: response.status,
-            statusText: response.statusText,
-            error: data
-          });
-          const errorMessage = data.error || data.message || 'Failed to search Gmail contacts';
-          throw new Error(errorMessage);
-        }
-
-        console.log('Contact search succeeded:', data);
-        setSuggestedContacts(data.contacts || []);
-      } catch (error) {
-        console.error('Error searching contacts:', error);
-        const errorMessage = error instanceof Error ? error.message : 'Failed to search contacts';
-        setError(errorMessage);
-        setSuggestedContacts([]);
-      }
-    }, 300),
+      await processSearchResults(text);
+    }, 500),
     []
   );
 
   useEffect(() => {
-    debouncedSearchContacts(prompt);
-    const type = detectMeetingType(prompt);
-    setMeetingType(type);
+    console.log('Suggested contacts updated:', selectedContacts);
+    console.log('Meeting summary updated:', meetingSummary);
+  }, [selectedContacts, meetingSummary]);
+
+  useEffect(() => {
+    if (prompt) {
+      debouncedSearchContacts(prompt);
+    } else {
+      setMeetingSummary(null);
+      setSelectedContacts(new Set());
+    }
   }, [prompt, debouncedSearchContacts]);
 
   const fetchInvites = useCallback(async () => {
@@ -365,29 +423,43 @@ export default function Dashboard() {
     });
   };
 
+  function detectMeetingType(prompt: string): { type: string; confidence: number } {
+    const prompt_lower = prompt.toLowerCase();
+  
+    // Meeting type patterns
+    const patterns = {
+      'in-person': ['in person', 'in-person', 'coffee', 'lunch', 'dinner', 'meet up', 'office'],
+      'virtual': ['virtual', 'zoom', 'teams', 'google meet', 'online', 'call', 'video'],
+    };
+
+    // Check each type
+    for (const [type, keywords] of Object.entries(patterns)) {
+      for (const keyword of keywords) {
+        if (prompt_lower.includes(keyword)) {
+          return { type, confidence: 0.9 };
+        }
+      }
+    }
+
+    // Default to in-person with lower confidence
+    return { type: 'in-person', confidence: 0.6 };
+  }
+
   return (
     <div className="min-h-screen bg-black text-white">
       <Navbar />
       <div className="max-w-6xl mx-auto px-4 pt-36">
-        <div className="mb-16">
-          <Link href="/settings">
-            <button className="px-6 py-2 bg-teal-500 text-white rounded-lg hover:bg-teal-600 transition-colors whitespace-nowrap">
-              Set Meetini's Meeting Preferences
-            </button>
-          </Link>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-16">
-          <div className="bg-gray-900 p-6 rounded-lg">
-            <h3 className="text-xl font-semibold text-white mb-4">Quick Create with AI</h3>
-            <p className="text-gray-400 mb-4">Just tell me what kind of meeting you want to schedule and I'll take care of the rest.</p>
+        <div className="bg-gray-900 p-8 rounded-lg mb-16">
+          <div className="max-w-3xl mx-auto">
+            <h3 className="text-xl font-semibold text-white mb-4">Schedule a Meeting</h3>
+            <p className="text-gray-400 mb-6">Tell me what kind of meeting you want to schedule or set it up manually.</p>
             
-            <div className="relative">
+            <div className="relative mb-6">
               <textarea
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 placeholder="e.g. Schedule a coffee meeting with John tomorrow morning"
-                className="w-full p-4 bg-gray-800 text-white rounded-lg mb-4 min-h-[100px]"
+                className="w-full p-4 bg-gray-800 text-white rounded-lg mb-2 min-h-[100px] resize-none"
                 disabled={isProcessing}
               />
               
@@ -404,120 +476,92 @@ export default function Dashboard() {
               </button>
             </div>
 
-            {/* Show contact suggestions */}
-            {suggestedContacts.length > 0 && !isProcessing && (
-              <div className="mb-4">
-                <h4 className="text-sm font-medium text-gray-400 mb-2">Found in your Gmail history:</h4>
-                <div className="flex flex-wrap gap-2">
-                  {suggestedContacts.map((contact) => (
-                    <div
-                      key={contact.email}
-                      className="px-3 py-1 bg-gray-800 rounded-full text-sm text-white flex items-center gap-2"
-                    >
-                      <span>{contact.name}</span>
-                      <span className="text-gray-400 text-xs">({Math.round(contact.confidence * 100)}%)</span>
+            {meetingSummary && (
+              <div className="mb-6 p-4 bg-gray-800 rounded-lg">
+                <h4 className="text-sm font-medium text-gray-400 mb-3">Meeting Summary</h4>
+                <div className="space-y-4">
+                  {/* Participants */}
+                  <div className="space-y-2">
+                    <h5 className="text-xs font-medium text-gray-500">PARTICIPANTS</h5>
+                    <div className="space-y-2">
+                      {meetingSummary.contacts.map((contact) => (
+                        <div 
+                          key={contact.email} 
+                          className={`flex items-center justify-between text-sm p-2 rounded cursor-pointer transition-colors ${
+                            selectedContacts.has(contact.email) 
+                              ? 'bg-teal-500/20 hover:bg-teal-500/30' 
+                              : 'hover:bg-gray-700'
+                          }`}
+                          onClick={() => toggleContactSelection(contact.email)}
+                        >
+                          <div className="flex items-center space-x-2">
+                            <div className={`w-2 h-2 rounded-full ${
+                              selectedContacts.has(contact.email) ? 'bg-teal-500' : 'bg-gray-500'
+                            }`}></div>
+                            <span className="text-white">{contact.name}</span>
+                            {contact.matchedName && (
+                              <span className="text-gray-500 text-xs">
+                                (matched: {contact.matchedName})
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-gray-400 text-xs">{contact.email}</span>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  </div>
+
+                  {/* Meeting Type */}
+                  {meetingSummary.type && (
+                    <div>
+                      <h5 className="text-xs font-medium text-gray-500 mb-1">TYPE</h5>
+                      <div className="flex items-center space-x-2">
+                        <div className="w-2 h-2 rounded-full bg-purple-500"></div>
+                        <span className="text-white capitalize">
+                          {meetingSummary.type}
+                        </span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
 
-            {/* Show detected meeting type */}
-            {meetingType.type && !isProcessing && (
-              <div className="mb-4">
-                <h4 className="text-sm font-medium text-gray-400 mb-2">Detected meeting type:</h4>
-                <div className="px-3 py-1 bg-gray-800 rounded-full text-sm text-white inline-flex items-center gap-2">
-                  <span className="capitalize">{meetingType.type.replace('-', ' ')}</span>
-                  <span className="text-gray-400 text-xs">({Math.round(meetingType.confidence * 100)}%)</span>
-                </div>
-              </div>
-            )}
-
-            {/* Ask for meeting type if we detect names but no type */}
-            {suggestedContacts.length > 0 && !meetingType.type && !isProcessing && (
-              <div className="mb-4">
-                <h4 className="text-sm font-medium text-gray-400 mb-2">What type of meeting would you like?</h4>
-                <div className="flex flex-wrap gap-2">
-                  {['in-person', 'virtual', 'phone'].map((type) => (
-                    <button
-                      key={type}
-                      onClick={() => setPrompt(prev => `${prev} (${type} meeting)`)}
-                      className="px-3 py-1 bg-gray-800 rounded-full text-sm text-white hover:bg-gray-700 transition-colors"
-                    >
-                      <span className="capitalize">{type.replace('-', ' ')}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {!isProcessing && prompt && (
+            <div className="flex justify-center space-x-4">
+              <Link href="/settings">
+                <button className="px-6 py-3 bg-teal-500 text-white rounded-lg hover:bg-teal-600 transition-colors whitespace-nowrap flex items-center justify-center space-x-2">
+                  <span>Customize Your Meetini's 🍸 Settings</span>
+                </button>
+              </Link>
               <button
-                onClick={async () => {
-                  try {
-                    setIsProcessing(true);
-                    const response = await fetch('/api/meetini/ai-create', {
-                      method: 'POST',
-                      headers: {
-                        'Content-Type': 'application/json',
-                      },
-                      credentials: 'same-origin',
-                      body: JSON.stringify({ prompt }),
-                    });
-                    
-                    if (!response.ok) {
-                      const error = await response.json();
-                      throw new Error(error.error || 'Failed to create meetini');
-                    }
-                    
-                    setPrompt('');
-                    showToast('success', 'Your meeting request is being processed.');
-                    await fetchInvites(); // Refresh the invites list
-                  } catch (error) {
-                    console.error('Error creating meetini:', error);
-                    showToast('error', error instanceof Error ? error.message : 'Failed to create meeting. Please try again.');
-                  } finally {
-                    setIsProcessing(false);
-                  }
-                }}
-                className="w-full px-6 py-2 bg-teal-500 text-white rounded-lg hover:bg-teal-600 transition-colors whitespace-nowrap"
+                onClick={() => setIsCreateModalOpen(true)}
+                className="px-6 py-3 bg-teal-500 text-white rounded-lg hover:bg-teal-600 transition-colors"
+                disabled={isProcessing}
               >
                 Create Meetini
               </button>
-            )}
-
-            {isProcessing && (
-              <div className="w-full flex items-center justify-center py-2">
-                <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-teal-500"></div>
-              </div>
-            )}
-          </div>
-
-          <div className="bg-gray-900 p-6 rounded-lg">
-            <h3 className="text-xl font-semibold text-white mb-4">Manual Setup</h3>
-            <p className="text-gray-400 mb-4">Specify your preferences and let us find the perfect time that works for everyone.</p>
-            <button
-              onClick={() => setShowManualSetup(true)}
-              className="px-6 py-2 bg-teal-500 text-white rounded-lg hover:bg-teal-600 transition-colors whitespace-nowrap"
-            >
-              Start Manual Setup
-            </button>
+              <button
+                onClick={() => setShowManualSetup(true)}
+                className="px-6 py-3 bg-gray-700 text-white rounded-lg hover:bg-gray-600 transition-colors"
+              >
+                Manual Setup
+              </button>
+            </div>
           </div>
         </div>
 
-        {/* Manual Setup Modal */}
-        {showManualSetup && (
-          <CreateMeetiniForm
-            isOpen={true}
-            onClose={() => setShowManualSetup(false)}
-            onSuccess={() => {
-              setShowManualSetup(false);
-              showToast('success', 'Meeting created successfully.');
-            }}
-            initialPrompt=""
-            mode="manual"
-          />
-        )}
+        {/* Embed Google Calendar */}
+        <div className="mb-16">
+          <iframe
+            src={`https://calendar.google.com/calendar/embed?src=${encodeURIComponent(session?.user?.email || '')}&showTitle=0&showNav=1&showPrint=0&showTabs=1&showCalendars=1&height=600&mode=WEEK`}
+            style={{ border: 0 }}
+            width="100%"
+            height="600"
+            frameBorder="0"
+            scrolling="no"
+            className="rounded-lg"
+          ></iframe>
+        </div>
 
         {/* Calendar Events Section - Single Row Expandable */}
         <div className="border border-gray-800 rounded-lg overflow-hidden mb-16">
@@ -662,45 +706,35 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Modals */}
-      <CreateMeetiniForm
-        isOpen={isCreateModalOpen}
-        onClose={() => {
-          setIsCreateModalOpen(false);
-          setInitialPrompt(null);
-          const { prompt, ...query } = router.query;
-          router.replace({ pathname: router.pathname, query }, undefined, { shallow: true });
-        }}
-        onSuccess={() => {
-          setInitialPrompt(null);
-          fetchInvites();
-        }}
-        initialPrompt={initialPrompt}
-        mode="manual"
-      />
+      {isCreateModalOpen && (
+        <CreateMeetiniForm
+          onClose={() => {
+            setIsCreateModalOpen(false);
+            setInitialPrompt(null);
+          }}
+          initialPrompt={initialPrompt}
+        />
+      )}
 
       <ConfirmationDialog
         isOpen={confirmDialog.isOpen}
-        onClose={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))}
-        onConfirm={confirmDialog.action}
         title={confirmDialog.title}
         message={confirmDialog.message}
+        onConfirm={() => {
+          confirmDialog.action();
+          setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+        }}
+        onCancel={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))}
         type={confirmDialog.type}
       />
 
-      {/* Toast Component */}
-      <Toast
-        show={toast.show}
-        type={toast.type}
-        message={toast.message}
-        onClose={() => setToast({ ...toast, show: false })}
-      />
+      {toast.show && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onClose={() => setToast(prev => ({ ...prev, show: false }))}
+        />
+      )}
     </div>
   );
-}
-
-function detectMeetingType(prompt: string) {
-  // Implement your meeting type detection logic here
-  // For now, just return a dummy value
-  return { type: 'in-person', confidence: 0.8 };
 }

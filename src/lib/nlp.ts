@@ -55,6 +55,12 @@ const COMMON_WORDS = new Set([
   'concerning', 'quick', 'brief', 'long', 'short'
 ]);
 
+// Extracted name with its position in the input
+interface ExtractedName {
+  name: string;
+  position: number;
+}
+
 /**
  * Detects the type of meeting from the input text
  */
@@ -105,78 +111,91 @@ export function detectMeetingType(text: string): {
  * by checking against common meeting-related terms.
  */
 export function extractNames(text: string): string[] {
-  // Split text into words and clean up
-  const words = text.split(/\s+/).map(w => w.trim());
-  const names: string[] = [];
-  let currentName: string[] = [];
-  let inNameSequence = false;
+  const nameGroups: ExtractedName[] = [];
+  let currentGroup: string[] = [];
+  let groupStart = -1;
 
+  // Split and normalize input
+  const words = text.toLowerCase().split(/\s+/).map(w => w.trim());
+  
+  // If there's only one word and it's not in common words, treat it as a name
+  if (words.length === 1 && !COMMON_WORDS.has(words[0]) && words[0].length > 1) {
+    return [words[0]];
+  }
+  
+  // Process words with a sliding window
   for (let i = 0; i < words.length; i++) {
     const word = words[i];
-    const cleanWord = word.replace(/[.,!?]$/, ''); // Remove trailing punctuation
-    const lowerWord = cleanWord.toLowerCase();
+    const cleanWord = word.replace(/[.,!?]$/, '');
     
-    // Skip empty words or very short words
+    // Skip very short words
     if (cleanWord.length <= 1) continue;
 
-    // Check for name indicators
-    const isNameIndicator = ['with', 'and', '@', 'for'].includes(lowerWord);
-    const nextWord = i < words.length - 1 ? words[i + 1] : '';
-    
-    // Start name sequence if we see an indicator
-    if (isNameIndicator && nextWord) {
-      if (currentName.length > 0) {
-        names.push(currentName.join(' '));
-        currentName = [];
+    // Check for name group markers
+    if (['with', 'and', 'for', '@'].includes(cleanWord)) {
+      // Save current group if exists
+      if (currentGroup.length > 0) {
+        nameGroups.push({
+          name: currentGroup.join(' '),
+          position: groupStart
+        });
+        currentGroup = [];
       }
-      inNameSequence = true;
+      groupStart = i + 1;
       continue;
     }
 
-    // Skip common words and words that look like times
+    // Skip if it's a common word or looks like a time
     if (
-      (!inNameSequence && COMMON_WORDS.has(lowerWord)) ||
+      COMMON_WORDS.has(cleanWord) ||
       /^\d{1,2}(:\d{2})?([ap]m)?$/i.test(cleanWord)
     ) {
-      if (currentName.length > 0) {
-        names.push(currentName.join(' '));
-        currentName = [];
+      if (currentGroup.length > 0) {
+        nameGroups.push({
+          name: currentGroup.join(' '),
+          position: groupStart
+        });
+        currentGroup = [];
       }
-      inNameSequence = false;
+      groupStart = -1;
       continue;
     }
 
-    // If it's capitalized or we're in a name sequence
+    // If we're in a group or starting a new one
+    if (groupStart === -1) groupStart = i;
+    currentGroup.push(cleanWord);
+
+    // Check if this is the end of a name group
+    const nextWord = i < words.length - 1 ? words[i + 1].toLowerCase().replace(/[.,!?]$/, '') : '';
     if (
-      cleanWord[0] === cleanWord[0].toUpperCase() ||
-      inNameSequence ||
-      currentName.length > 0
+      !nextWord ||
+      ['with', 'and', 'for', '@'].includes(nextWord) ||
+      COMMON_WORDS.has(nextWord)
     ) {
-      currentName.push(cleanWord);
-      
-      // If next word is a common word or punctuation, end the name
-      const nextWordLower = nextWord.toLowerCase().replace(/[.,!?]$/, '');
-      if (
-        !nextWord ||
-        COMMON_WORDS.has(nextWordLower) ||
-        ['and', 'with', '@', 'for'].includes(nextWordLower)
-      ) {
-        if (currentName.length > 0) {
-          names.push(currentName.join(' '));
-          currentName = [];
-        }
-        inNameSequence = false;
+      if (currentGroup.length > 0) {
+        nameGroups.push({
+          name: currentGroup.join(' '),
+          position: groupStart
+        });
+        currentGroup = [];
+        groupStart = -1;
       }
     }
   }
 
-  // Don't forget any name at the end
-  if (currentName.length > 0) {
-    names.push(currentName.join(' '));
+  // Add any remaining group
+  if (currentGroup.length > 0) {
+    nameGroups.push({
+      name: currentGroup.join(' '),
+      position: groupStart
+    });
   }
 
-  // Remove duplicates and very short names
-  return [...new Set(names)]
-    .filter(name => name.length > 2)
-    .map(name => name.trim());
+  // Sort by position and return unique names
+  return [...new Set(
+    nameGroups
+      .sort((a, b) => a.position - b.position)
+      .map(group => group.name)
+      .filter(name => name.length > 2)
+  )];
 }
