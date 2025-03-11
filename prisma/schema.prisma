@@ -260,4 +260,47 @@ model MeetingPreferences {
   schedulingRules    String  // JSON string
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
-} 
+}
+
+model MeetiniInvite {
+  id            String     @id @default(cuid())
+  title         String
+  type          String
+  status        String     @default("pending")
+  createdBy     String
+  location      String?
+  description   String?
+  proposedTimes ProposedTime[]
+  participants  MeetiniParticipant[]
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  @@index([createdBy])
+  @@index([status])
+}
+
+model ProposedTime {
+  id            String     @id @default(cuid())
+  dateTime      DateTime
+  status        String     @default("pending")
+  meetiniInvite MeetiniInvite @relation(fields: [meetiniInviteId], references: [id], onDelete: Cascade)
+  meetiniInviteId String
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  @@index([meetiniInviteId])
+}
+
+model MeetiniParticipant {
+  id            String     @id @default(cuid())
+  email         String
+  status        String     @default("pending")
+  isMeetiniUser Boolean    @default(false)
+  meetiniInvite MeetiniInvite @relation(fields: [meetiniInviteId], references: [id], onDelete: Cascade)
+  meetiniInviteId String
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  @@index([meetiniInviteId])
+  @@index([email])
+}

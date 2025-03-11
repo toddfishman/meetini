@@ -7,6 +7,8 @@ import ConfirmationDialog from '../components/ConfirmationDialog';
 import CreateMeetiniForm from '../components/CreateMeetiniForm';
 import Link from 'next/link';
 import Toast from '../components/Toast';
+import { createMeetiniInvite } from '@/lib/meetiniService';
+import { checkUserStatuses } from '@/lib/userService';
 
 interface CalendarEvent {
   id: string;
@@ -25,11 +27,12 @@ interface MeetiniInvite {
   id: string;
   title: string;
   status: 'pending' | 'accepted' | 'declined';
-  type: 'sent' | 'received';
-  participants: string[];
+  type: string;
+  participants: Array<{ email: string; name?: string; status: string }>;
   createdAt: string;
-  proposedTimes: string[];
+  proposedTimes: Array<{ dateTime: string; status: string }>;
   location?: string;
+  description?: string;
   createdBy: string;
 }
 
@@ -61,6 +64,15 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [initialPrompt, setInitialPrompt] = useState<string | null>(null);
+  const [toast, setToast] = useState<{
+    show: boolean;
+    message: string;
+    type: 'success' | 'error';
+  }>({
+    show: false,
+    message: '',
+    type: 'success'
+  });
   const [confirmDialog, setConfirmDialog] = useState<{
     isOpen: boolean;
     title: string;
@@ -83,14 +95,13 @@ export default function Dashboard() {
   const [meetingType, setMeetingType] = useState<{ type: string | undefined; confidence: number }>({ type: undefined, confidence: 0 });
   const [meetingSummary, setMeetingSummary] = useState<MeetingSummary | null>(null);
   const [showManualSetup, setShowManualSetup] = useState(false);
-  const [toast, setToast] = useState<{
-    show: boolean;
-    type: 'success' | 'error';
-    message: string;
-  }>({
-    show: false,
-    type: 'success',
-    message: '',
+  const [manualForm, setManualForm] = useState({
+    participants: '',
+    title: '',
+    location: '',
+    description: '',
+    date: '',
+    time: ''
   });
 
   const showToast = (type: 'success' | 'error', message: string) => {
@@ -302,16 +313,188 @@ export default function Dashboard() {
     }
   }, [router.query, initialPrompt]);
 
-  if (status === 'loading') {
-    return (
-      <div className="min-h-screen bg-black text-white flex items-center justify-center">
-        <div className="text-teal-500">Loading...</div>
-      </div>
-    );
+  const handleCreateMeetini = async () => {
+    if (!session?.user?.email) {
+      setToast({
+        message: 'You must be signed in to create a Meetini',
+        type: 'error'
+      });
+      return;
+    }
+
+    if (!meetingSummary) {
+      setToast({
+        message: 'Please select contacts before creating a Meetini',
+        type: 'error'
+      });
+      return;
+    }
+
+    try {
+      setIsProcessing(true);
+      console.log('Selected contacts:', selectedContacts);
+      console.log('Meeting summary:', meetingSummary);
+
+      // Get the full contact info for each selected email
+      const participants = meetingSummary.contacts
+        .filter(contact => selectedContacts.has(contact.email))
+        .map(contact => ({
+          email: contact.email,
+          name: contact.name
+        }));
+
+      // Check user status
+      const userStatuses = await checkUserStatuses(participants.map(p => p.email));
+      console.log('User statuses:', userStatuses);
+
+      // Create the Meetini invite
+      const invite = {
+        title: meetingSummary.type ? `${meetingSummary.type} Meeting` : 'New Meeting',
+        type: meetingSummary.type || 'meeting',
+        participants,
+        suggestedTimes: meetingSummary.suggestedTimes || [],
+        createdBy: session.user.email,
+      };
+      console.log('Creating invite:', invite);
+
+      const newInvite = await createMeetiniInvite(invite, userStatuses, session);
+      console.log('Created invite:', newInvite);
+
+      setToast({
+        show: true,
+        message: 'Meetini created successfully!',
+        type: 'success'
+      });
+
+      // Reset state
+      setMeetingSummary(null);
+      setSelectedContacts(new Set());
+      setIsProcessing(false);
+
+    } catch (error) {
+      console.error('Error creating Meetini:', error);
+      setToast({
+        show: true,
+        message: 'Failed to create Meetini',
+        type: 'error'
+      });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleManualCreate = async () => {
+    try {
+      setIsProcessing(true);
+      setError(null);
+
+      // Parse form data
+      const participants = manualForm.participants
+        .split('\n')
+        .map(email => email.trim())
+        .filter(email => email);
+
+      if (!participants.length) {
+        throw new Error('Please add at least one participant');
+      }
+
+      if (!manualForm.title) {
+        throw new Error('Please add a meeting title');
+      }
+
+      if (!manualForm.date || !manualForm.time) {
+        throw new Error('Please select a date and time');
+      }
+
+      // Format the time slot into a proper ISO date string
+      const [hours, minutes] = manualForm.time.match(/(\d+):(\d+)/)?.slice(1).map(Number) || [];
+      const isPM = manualForm.time.toLowerCase().includes('pm');
+      const adjustedHours = isPM && hours !== 12 ? hours + 12 : hours;
+      
+      const dateObj = new Date(manualForm.date);
+      dateObj.setHours(adjustedHours, minutes, 0, 0);
+      const dateTimeISO = dateObj.toISOString();
+
+      console.log('Formatted datetime:', {
+        original: { date: manualForm.date, time: manualForm.time },
+        parsed: { hours, minutes, isPM, adjustedHours },
+        result: dateTimeISO
+      });
+
+      // Check user statuses first
+      const userStatusesResult = await checkUserStatuses(participants);
+      console.log('User statuses:', userStatusesResult);
+
+      // Create the invite
+      const invite = {
+        type: 'meetini',
+        participants: participants.map(email => ({ email })),
+        suggestedTimes: [dateTimeISO],
+        title: manualForm.title,
+        location: manualForm.location || undefined,
+        description: manualForm.description || undefined,
+        createdBy: session?.user?.email || ''
+      };
+
+      try {
+        const result = await createMeetiniInvite(invite, userStatusesResult, session);
+        console.log('Created invite:', result);
+        
+        showToast('success', 'Meeting invitation created successfully!');
+        setShowManualSetup(false);
+        setManualForm({
+          participants: '',
+          title: '',
+          location: '',
+          description: '',
+          date: '',
+          time: ''
+        });
+        
+        // Refresh the invites list
+        fetchInvites();
+      } catch (error) {
+        console.error('Failed to create Meetini invite:', error);
+        const errorMessage = error instanceof Error ? error.message : 'Failed to create meeting';
+        showToast('error', errorMessage);
+        setError(errorMessage);
+      }
+    } catch (error) {
+      console.error('Failed to create meeting:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Failed to create meeting';
+      showToast('error', errorMessage);
+      setError(errorMessage);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleManualFormChange = (field: string, value: string) => {
+    setManualForm(prev => ({
+      ...prev,
+      [field]: value
+    }));
+  };
+
+  const handleAddTimeSlot = () => {
+    // Removed this function as it is not needed anymore
+  };
+
+  const handleRemoveTimeSlot = (index: number) => {
+    // Removed this function as it is not needed anymore
+  };
+
+  if (status === "unauthenticated") {
+    router.push("/auth/signin");
+    return null;
   }
 
-  if (!session) {
-    return null;
+  if (loading || inviteLoading) {
+    return (
+      <div className="flex justify-center items-center min-h-screen">
+        <div className="animate-spin rounded-full h-32 w-32 border-t-2 border-b-2 border-teal-500"></div>
+      </div>
+    );
   }
 
   const toggleEvent = (eventId: string) => {
@@ -446,26 +629,26 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="min-h-screen bg-black text-white">
+    <div className="min-h-screen bg-gray-900">
       <Navbar />
-      <div className="max-w-6xl mx-auto px-4 pt-36">
-        <div className="bg-gray-900 p-8 rounded-lg mb-16">
+      <main className="container mx-auto px-12 py-32 max-w-6xl">
+        <div className="bg-gray-800 p-12 rounded-xl mb-12 shadow-xl">
           <div className="max-w-3xl mx-auto">
-            <h3 className="text-xl font-semibold text-white mb-4">Schedule a Meeting</h3>
-            <p className="text-gray-400 mb-6">Tell me what kind of meeting you want to schedule or set it up manually.</p>
+            <h3 className="text-2xl font-semibold text-white mb-4">Schedule a Meeting</h3>
+            <p className="text-gray-300 mb-6">Tell me what kind of meeting you want to schedule or set it up manually.</p>
             
             <div className="relative mb-6">
               <textarea
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 placeholder="e.g. Schedule a coffee meeting with John tomorrow morning"
-                className="w-full p-4 bg-gray-800 text-white rounded-lg mb-2 min-h-[100px] resize-none"
+                className="w-full p-4 bg-gray-700 text-white rounded-lg mb-2 min-h-[100px] resize-none border border-gray-600 focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
                 disabled={isProcessing}
               />
               
               <button
                 onClick={startListening}
-                className={`absolute top-2 right-2 p-2 rounded-full ${
+                className={`absolute top-4 right-4 p-2 rounded-full ${
                   isListening ? 'bg-red-500' : 'bg-teal-500'
                 } hover:opacity-80 transition-colors`}
                 disabled={isProcessing}
@@ -477,35 +660,35 @@ export default function Dashboard() {
             </div>
 
             {meetingSummary && (
-              <div className="mb-6 p-4 bg-gray-800 rounded-lg">
-                <h4 className="text-sm font-medium text-gray-400 mb-3">Meeting Summary</h4>
-                <div className="space-y-4">
+              <div className="mb-6 p-6 bg-gray-700 rounded-lg border border-gray-600">
+                <h4 className="text-sm font-medium text-gray-300 mb-4">Meeting Summary</h4>
+                <div className="space-y-6">
                   {/* Participants */}
-                  <div className="space-y-2">
-                    <h5 className="text-xs font-medium text-gray-500">PARTICIPANTS</h5>
+                  <div className="space-y-3">
+                    <h5 className="text-xs font-medium text-gray-400">PARTICIPANTS</h5>
                     <div className="space-y-2">
                       {meetingSummary.contacts.map((contact) => (
                         <div 
                           key={contact.email} 
-                          className={`flex items-center justify-between text-sm p-2 rounded cursor-pointer transition-colors ${
+                          className={`flex items-center justify-between text-sm p-3 rounded cursor-pointer transition-colors ${
                             selectedContacts.has(contact.email) 
-                              ? 'bg-teal-500/20 hover:bg-teal-500/30' 
-                              : 'hover:bg-gray-700'
+                              ? 'bg-teal-500/20 hover:bg-teal-500/30 border border-teal-500/30' 
+                              : 'hover:bg-gray-600 border border-gray-600'
                           }`}
                           onClick={() => toggleContactSelection(contact.email)}
                         >
-                          <div className="flex items-center space-x-2">
+                          <div className="flex items-center space-x-3">
                             <div className={`w-2 h-2 rounded-full ${
-                              selectedContacts.has(contact.email) ? 'bg-teal-500' : 'bg-gray-500'
+                              selectedContacts.has(contact.email) ? 'bg-teal-500' : 'bg-gray-400'
                             }`}></div>
                             <span className="text-white">{contact.name}</span>
                             {contact.matchedName && (
-                              <span className="text-gray-500 text-xs">
+                              <span className="text-gray-400 text-xs">
                                 (matched: {contact.matchedName})
                               </span>
                             )}
                           </div>
-                          <span className="text-gray-400 text-xs">{contact.email}</span>
+                          <span className="text-gray-300 text-xs">{contact.email}</span>
                         </div>
                       ))}
                     </div>
@@ -514,11 +697,11 @@ export default function Dashboard() {
                   {/* Meeting Type */}
                   {meetingSummary.type && (
                     <div>
-                      <h5 className="text-xs font-medium text-gray-500 mb-1">TYPE</h5>
-                      <div className="flex items-center space-x-2">
+                      <h5 className="text-xs font-medium text-gray-400 mb-2">TYPE</h5>
+                      <div className="flex items-center space-x-3 p-3 bg-gray-600/30 rounded-lg border border-gray-600">
                         <div className="w-2 h-2 rounded-full bg-purple-500"></div>
                         <span className="text-white capitalize">
-                          {meetingSummary.type}
+                          {meetingSummary.type || 'Unknown'}
                         </span>
                       </div>
                     </div>
@@ -527,28 +710,141 @@ export default function Dashboard() {
               </div>
             )}
 
-            <div className="flex justify-center space-x-4">
-              <Link href="/settings">
-                <button className="px-6 py-3 bg-teal-500 text-white rounded-lg hover:bg-teal-600 transition-colors whitespace-nowrap flex items-center justify-center space-x-2">
-                  <span>Customize Your Meetini's 🍸 Settings</span>
-                </button>
-              </Link>
+            <div className="flex gap-4 mt-8">
               <button
-                onClick={() => setIsCreateModalOpen(true)}
-                className="px-6 py-3 bg-teal-500 text-white rounded-lg hover:bg-teal-600 transition-colors"
+                onClick={() => setShowSettings(true)}
+                className="flex-1 py-3 px-6 bg-gray-700 text-white rounded-lg hover:bg-gray-600 transition-colors border border-gray-600"
+              >
+                Customize Your Meetini's
+              </button>
+              <button
+                onClick={handleCreateMeetini}
+                className="flex-1 py-3 px-6 bg-teal-500 text-white rounded-lg hover:bg-teal-600 transition-colors"
                 disabled={isProcessing}
               >
                 Create Meetini
               </button>
               <button
                 onClick={() => setShowManualSetup(true)}
-                className="px-6 py-3 bg-gray-700 text-white rounded-lg hover:bg-gray-600 transition-colors"
+                className="flex-1 py-3 px-6 bg-gray-700 text-white rounded-lg hover:bg-gray-600 transition-colors border border-gray-600"
               >
                 Manual Setup
               </button>
             </div>
           </div>
         </div>
+
+        {/* Manual Setup Modal */}
+        {showManualSetup && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-gray-800 p-8 rounded-xl shadow-2xl w-full max-w-4xl mx-4">
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-2xl font-semibold text-white">Manual Meeting Setup</h2>
+                <button 
+                  onClick={() => setShowManualSetup(false)}
+                  className="text-gray-400 hover:text-white"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    Participant Emails (one per line)
+                  </label>
+                  <textarea
+                    value={manualForm.participants}
+                    onChange={(e) => handleManualFormChange('participants', e.target.value)}
+                    className="w-full p-3 bg-gray-700 text-white rounded-lg border border-gray-600 focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
+                    rows={3}
+                    placeholder="john@example.com&#13;&#10;jane@example.com"
+                  />
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    Meeting Title
+                  </label>
+                  <input
+                    type="text"
+                    value={manualForm.title}
+                    onChange={(e) => handleManualFormChange('title', e.target.value)}
+                    className="w-full p-3 bg-gray-700 text-white rounded-lg border border-gray-600 focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
+                    placeholder="Quick sync"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    Meeting Time
+                  </label>
+                  <div className="flex gap-4">
+                    <div className="flex-1">
+                      <input
+                        type="date"
+                        value={manualForm.date}
+                        onChange={(e) => handleManualFormChange('date', e.target.value)}
+                        className="w-full p-3 bg-gray-700 text-white rounded-lg border border-gray-600 focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
+                      />
+                    </div>
+                    <div className="flex-1">
+                      <input
+                        type="time"
+                        value={manualForm.time}
+                        onChange={(e) => handleManualFormChange('time', e.target.value)}
+                        className="w-full p-3 bg-gray-700 text-white rounded-lg border border-gray-600 focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    Location (optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={manualForm.location}
+                    onChange={(e) => handleManualFormChange('location', e.target.value)}
+                    className="w-full p-3 bg-gray-700 text-white rounded-lg border border-gray-600 focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
+                    placeholder="Coffee shop, Zoom link, etc."
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    Description (optional)
+                  </label>
+                  <textarea
+                    value={manualForm.description}
+                    onChange={(e) => handleManualFormChange('description', e.target.value)}
+                    className="w-full p-3 bg-gray-700 text-white rounded-lg border border-gray-600 focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
+                    rows={3}
+                    placeholder="Brief meeting description..."
+                  />
+                </div>
+
+                <div className="flex gap-4 mt-8">
+                  <button
+                    onClick={() => setShowManualSetup(false)}
+                    className="flex-1 py-3 px-6 bg-gray-700 text-white rounded-lg hover:bg-gray-600 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleManualCreate}
+                    className="flex-1 py-3 px-6 bg-teal-500 text-white rounded-lg hover:bg-teal-600 transition-colors"
+                  >
+                    Create Meeting
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Embed Google Calendar */}
         <div className="mb-16">
@@ -561,46 +857,6 @@ export default function Dashboard() {
             scrolling="no"
             className="rounded-lg"
           ></iframe>
-        </div>
-
-        {/* Calendar Events Section - Single Row Expandable */}
-        <div className="border border-gray-800 rounded-lg overflow-hidden mb-16">
-          <button
-            className="w-full p-4 bg-gray-900 text-left font-medium text-teal-500 hover:bg-gray-800 transition-colors flex justify-between items-center"
-            onClick={() => setExpandedEvents(prev => 
-              prev.length === Object.keys(groupedEvents).length ? [] : Object.keys(groupedEvents)
-            )}
-          >
-            <div className="flex items-center gap-2">
-              <span className="text-lg">Calendar Events</span>
-              {loading && <span className="text-sm text-gray-400">(Loading...)</span>}
-            </div>
-            <span className="text-sm text-gray-400">
-              {events.length} total event{events.length !== 1 ? 's' : ''}
-            </span>
-          </button>
-          
-          {expandedEvents.length > 0 && (
-            <div className="bg-black/30">
-              {Object.entries(groupedEvents).map(([monthYear, monthEvents]) => (
-                <div key={monthYear} className="border-t border-gray-800">
-                  <div className="p-4">
-                    <div className="font-medium text-teal-500 mb-2">{monthYear}</div>
-                    <div className="space-y-3">
-                      {monthEvents.map((event) => (
-                        <div key={event.id} className="pl-4 border-l-2 border-gray-800">
-                          <h3 className="font-medium text-white">{event.summary}</h3>
-                          <p className="text-sm text-gray-400">
-                            {new Date(event.start.dateTime || event.start.date || Date.now()).toLocaleString()}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
 
         {/* Meetini Invitations Section */}
@@ -653,7 +909,7 @@ export default function Dashboard() {
                   <div className="space-y-2 text-sm text-gray-400">
                     <p>
                       <span className="font-medium">Participants: </span>
-                      {invite.participants.join(', ')}
+                      {invite.participants.map(participant => participant.email).join(', ')}
                     </p>
                     <p>
                       <span className="font-medium">Location: </span>
@@ -662,7 +918,7 @@ export default function Dashboard() {
                     <p>
                       <span className="font-medium">Proposed Times: </span>
                       {invite.proposedTimes.map(time => 
-                        new Date(time).toLocaleString()
+                        new Date(time.dateTime).toLocaleString()
                       ).join(', ')}
                     </p>
                     <p className="text-xs">
@@ -704,18 +960,17 @@ export default function Dashboard() {
             )}
           </div>
         </div>
-      </div>
 
-      {isCreateModalOpen && (
-        <CreateMeetiniForm
-          onClose={() => {
-            setIsCreateModalOpen(false);
-            setInitialPrompt(null);
-          }}
-          initialPrompt={initialPrompt}
-        />
-      )}
-
+        {isCreateModalOpen && (
+          <CreateMeetiniForm
+            onClose={() => {
+              setIsCreateModalOpen(false);
+              setInitialPrompt(null);
+            }}
+            initialPrompt={initialPrompt}
+          />
+        )}
+      </main>
       <ConfirmationDialog
         isOpen={confirmDialog.isOpen}
         title={confirmDialog.title}
@@ -727,11 +982,11 @@ export default function Dashboard() {
         onCancel={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))}
         type={confirmDialog.type}
       />
-
       {toast.show && (
         <Toast
-          message={toast.message}
+          show={toast.show}
           type={toast.type}
+          message={toast.message}
           onClose={() => setToast(prev => ({ ...prev, show: false }))}
         />
       )}

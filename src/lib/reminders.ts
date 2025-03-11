@@ -28,54 +28,18 @@ type UserWithSettings = Prisma.UserGetPayload<{
 
 export async function scheduleReminders(invitationId: string): Promise<void> {
   try {
-    const invitation = await prisma.invitation.findUnique({
-      where: { id: invitationId },
-      include: {
-        participants: true,
-        creator: {
-          include: {
-            reminderSettings: true,
-          },
-        },
-        recipients: {
-          include: {
-            reminderSettings: true,
-          },
-        },
+    const response = await fetch('/api/reminders', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
       },
+      body: JSON.stringify({ invitationId }),
     });
 
-    if (!invitation) throw new Error('Invitation not found');
-
-    // Schedule reminders based on user preferences
-    const reminderJobs: ReminderJob[] = [];
-
-    // For each participant, schedule reminders based on their settings
-    [...invitation.recipients, invitation.creator].forEach((user: UserWithSettings) => {
-      if (!user.reminderSettings) return;
-
-      user.reminderSettings.forEach(setting => {
-        if (!setting.enabled) return;
-
-        setting.timing.forEach(minutes => {
-          const scheduledFor = addMinutes(new Date(), -minutes);
-          reminderJobs.push({
-            invitationId,
-            type: setting.type as 'invitation' | 'response_needed' | 'upcoming_meeting',
-            scheduledFor,
-          });
-        });
-      });
-    });
-
-    // Create reminder records in the database
-    await prisma.reminder.createMany({
-      data: reminderJobs.map(job => ({
-        invitationId: job.invitationId,
-        type: job.type,
-        scheduledFor: job.scheduledFor,
-      })),
-    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to schedule reminders');
+    }
   } catch (error) {
     console.error('Failed to schedule reminders:', error);
     throw error;
@@ -84,27 +48,20 @@ export async function scheduleReminders(invitationId: string): Promise<void> {
 
 export async function processReminders(): Promise<void> {
   try {
-    // Find all due reminders that haven't been sent
-    const dueReminders = await prisma.reminder.findMany({
-      where: {
-        sent: false,
-        scheduledFor: {
-          lte: new Date(),
-        },
-      },
-      include: {
-        invitation: {
-          include: {
-            participants: true,
-            creator: true,
-          },
-        },
-      },
+    const response = await fetch('/api/reminders', {
+      method: 'GET',
     });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to process reminders');
+    }
+
+    const reminders = await response.json();
 
     // Process each reminder
     await Promise.all(
-      dueReminders.map(async (reminder: ReminderWithInvitation) => {
+      reminders.map(async (reminder: ReminderWithInvitation) => {
         const { invitation } = reminder;
         if (!invitation) return;
 
@@ -141,39 +98,14 @@ export async function processReminders(): Promise<void> {
 
 export async function cleanupReminders(): Promise<void> {
   try {
-    // Delete old sent reminders (older than 30 days)
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-
-    await prisma.reminder.deleteMany({
-      where: {
-        sent: true,
-        sentAt: {
-          lt: thirtyDaysAgo,
-        },
-      },
+    const response = await fetch('/api/reminders', {
+      method: 'DELETE',
     });
 
-    // Delete reminders for past meetings
-    const now = new Date();
-    const pastInvitations = await prisma.invitation.findMany({
-      where: {
-        proposedTimes: {
-          every: {
-            lt: now,
-          },
-        },
-      },
-      select: { id: true },
-    });
-
-    await prisma.reminder.deleteMany({
-      where: {
-        invitationId: {
-          in: pastInvitations.map(inv => inv.id),
-        },
-      },
-    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to cleanup reminders');
+    }
   } catch (error) {
     console.error('Failed to cleanup reminders:', error);
     throw error;
@@ -191,4 +123,4 @@ function getReminderDescription(type: string): string {
     default:
       return '';
   }
-} 
+}
