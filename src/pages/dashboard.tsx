@@ -1,10 +1,9 @@
-import React, { useEffect, useState, useCallback, useRef } from "react";
+import React, { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/router";
 import Image from "next/image";
 import Navbar from '../components/Navbar';
 import ConfirmationDialog from '../components/ConfirmationDialog';
-import CreateMeetiniForm from '../components/CreateMeetiniForm';
 import Link from 'next/link';
 import Toast from '../components/Toast';
 
@@ -49,11 +48,11 @@ interface MeetingSummary {
   suggestedTimes?: string[];
 }
 
-interface CreateMeetiniFormProps {
-  isOpen: boolean;
+interface ToastProps {
+  show: boolean;
+  message: string;
+  type: 'success' | 'error';
   onClose: () => void;
-  onSuccess: () => void;
-  initialPrompt: string | null;
 }
 
 interface ConfirmationDialogProps {
@@ -65,23 +64,59 @@ interface ConfirmationDialogProps {
   type: 'danger' | 'success' | 'warning';
 }
 
-interface ToastProps {
-  show: boolean;
-  message: string;
-  type: 'success' | 'error';
-  onClose: () => void;
+interface SearchResponse {
+  contacts: {
+    [key: string]: Contact[];
+  };
+  error?: string;
+}
+
+interface SpeechRecognitionResult {
+  transcript: string;
+  isFinal: boolean;
+}
+
+interface SpeechRecognitionResultList {
+  [index: number]: SpeechRecognitionResult[];
+  length: number;
+}
+
+interface SpeechRecognitionEvent extends Event {
+  results: SpeechRecognitionResultList;
+}
+
+interface SpeechRecognition extends EventTarget {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onend: ((this: SpeechRecognition, ev: Event) => void) | null;
+  onerror: ((this: SpeechRecognition, ev: Event) => void) | null;
+  onresult: ((this: SpeechRecognition, ev: SpeechRecognitionEvent) => void) | null;
+  start(): void;
+  stop(): void;
+}
+
+// Augment the window interface
+declare global {
+  var webkitSpeechRecognition: { new(): SpeechRecognition };
+  var currentRecognition: SpeechRecognition | null;
 }
 
 export default function Dashboard() {
   const { data: session, status } = useSession();
   const router = useRouter();
-  const [events, setEvents] = useState<CalendarEvent[]>([]);
-  const [loading, setLoading] = useState(true);
   const [expandedEvents, setExpandedEvents] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<'sent' | 'received'>('received');
   const [meetiniInvites, setMeetiniInvites] = useState<MeetiniInvite[]>([]);
-  const [inviteLoading, setInviteLoading] = useState(true);
+  const [inviteLoading, setInviteLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [prompt, setPrompt] = useState('');
+  const [isListening, setIsListening] = useState(false);
+  const [selectedContacts, setSelectedContacts] = useState<Set<string>>(new Set());
+  const [meetingSummary, setMeetingSummary] = useState<MeetingSummary | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [initialPrompt, setInitialPrompt] = useState<string | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmationDialogProps>({
@@ -92,70 +127,178 @@ export default function Dashboard() {
     onConfirm: () => {},
     type: 'warning'
   });
-
-  const [isListening, setIsListening] = useState(false);
-  const [prompt, setPrompt] = useState('');
-  const previousPrompt = useRef(prompt);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [selectedContacts, setSelectedContacts] = useState<Set<string>>(new Set());
-  const [meetingType, setMeetingType] = useState<{ type: string | undefined; confidence: number }>({ type: undefined, confidence: 0 });
-  const [meetingSummary, setMeetingSummary] = useState<MeetingSummary | null>(null);
-  const [showManualSetup, setShowManualSetup] = useState(false);
   const [toast, setToast] = useState<ToastProps>({
     show: false,
     message: '',
     type: 'success',
-    onClose: () => {}
+    onClose: () => setToast(prev => ({ ...prev, show: false }))
   });
+  const [meetingType, setMeetingType] = useState<{ type: string | undefined; confidence: number }>({ type: undefined, confidence: 0 });
+  const [showManualSetup, setShowManualSetup] = useState(false);
 
-  const showToast = (type: 'success' | 'error', message: string) => {
+  const showToast = useCallback((type: 'success' | 'error', message: string) => {
     const onClose = () => setToast(prev => ({ ...prev, show: false, onClose: () => {} }));
     setToast({ show: true, type, message, onClose });
     setTimeout(() => {
       setToast(prev => ({ ...prev, show: false, onClose: () => {} }));
     }, 5000);
-  };
+  }, []);
 
-  const stopListening = () => {
+  const stopListening = useCallback(() => {
     if (window.currentRecognition) {
       window.currentRecognition.stop();
       window.currentRecognition = null;
     }
     setIsListening(false);
-  };
+  }, []);
 
-  const startListening = async () => {
+  // Generic debounce function with proper typing
+  function debounce<T extends (...args: any[]) => any>(
+    func: T,
+    wait: number
+  ): (...args: Parameters<T>) => void {
+    let timeout: NodeJS.Timeout | undefined;
+    return function (this: any, ...args: Parameters<T>) {
+      clearTimeout(timeout);
+      timeout = setTimeout(() => func.apply(this, args), wait);
+    };
+  }
+
+  // Memoize the search contacts function with proper dependencies
+  const searchContacts = useCallback(async (query: string) => {
+    try {
+      if (isProcessing) return;
+      setIsProcessing(true);
+      setError(null);
+
+      const response = await fetch(`/api/contacts/search?q=${encodeURIComponent(query)}`);
+      const data = await response.json() as SearchResponse;
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to search contacts');
+      }
+
+      if (data.contacts) {
+        const allContacts = Object.values(data.contacts)
+          .flat()
+          .filter((contact): contact is Contact => 
+            contact !== null &&
+            typeof contact === 'object' &&
+            'email' in contact &&
+            typeof contact.email === 'string' &&
+            'name' in contact &&
+            typeof contact.name === 'string' &&
+            'frequency' in contact &&
+            typeof contact.frequency === 'number'
+          )
+          .sort((a, b) => (b.frequency || 0) - (a.frequency || 0))
+          .filter((contact, index, self) => 
+            index === self.findIndex(c => c.email === contact.email)
+          );
+
+        const detectedType = detectMeetingType(query);
+        
+        setMeetingSummary(prev => {
+          if (prev && 
+              prev.contacts.length === allContacts.length && 
+              prev.contacts.every((c, i) => c.email === allContacts[i].email)) {
+            return prev;
+          }
+          return {
+            contacts: allContacts,
+            type: detectedType.type,
+            confidence: detectedType.confidence,
+            suggestedTimes: prev?.suggestedTimes || []
+          };
+        });
+
+        const highConfidenceContacts = allContacts.filter(contact => contact.confidence >= 0.9);
+        if (highConfidenceContacts.length > 0) {
+          setSelectedContacts(prev => {
+            const newSet = new Set(prev);
+            highConfidenceContacts.forEach(contact => newSet.add(contact.email));
+            return newSet;
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Failed to search contacts:', error);
+      setError(error instanceof Error ? error.message : 'Failed to search contacts');
+    } finally {
+      setIsProcessing(false);
+    }
+  }, []);
+
+  // Memoize the debounced search function
+  const debouncedSearchContacts = useMemo(() => 
+    debounce((query: string) => {
+      if (!query.trim()) {
+        setMeetingSummary(null);
+        setSelectedContacts(new Set());
+        setIsProcessing(false);
+        return;
+      }
+
+      if (query.length < 2) {
+        setMeetingSummary(prev => {
+          if (!prev || prev.contacts.length > 0) {
+            return {
+              contacts: [],
+              type: undefined,
+              confidence: 0,
+              suggestedTimes: prev?.suggestedTimes || []
+            };
+          }
+          return prev;
+        });
+        setIsProcessing(false);
+        return;
+      }
+
+      searchContacts(query);
+    }, 500),
+    [searchContacts]
+  );
+
+  // Handle prompt changes with proper dependencies
+  const handlePromptChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const newValue = e.target.value;
+    setPrompt(newValue);
+    debouncedSearchContacts(newValue);
+  }, [debouncedSearchContacts]);
+
+  // Start listening with proper dependencies
+  const startListening = useCallback(async () => {
     if (!('webkitSpeechRecognition' in window)) {
       setError('Speech recognition is not supported in your browser. Please use Chrome.');
       return;
     }
 
     try {
-      if (isListening) {
-        stopListening();
-        return;
-      }
-
-      setIsListening(true);
-      setError(null);
-
       const recognition = new window.webkitSpeechRecognition();
       window.currentRecognition = recognition;
-      
+
       recognition.continuous = true;
       recognition.interimResults = true;
+      recognition.lang = 'en-US';
 
-      recognition.onresult = (event: any) => {
-        const transcript = Array.from(event.results)
-          .map((result: any) => result[0])
-          .map((result: any) => result.transcript)
-          .join('');
+      recognition.onresult = (event: SpeechRecognitionEvent) => {
+        const results = Array.from(event.results);
+        const transcripts = results.map(result => {
+          const firstAlternative = result[0];
+          return firstAlternative?.transcript || '';
+        });
+        const transcript = transcripts.join(' ').trim();
         
-        setPrompt(transcript);
+        if (transcript) {
+          setPrompt(transcript);
+          debouncedSearchContacts(transcript);
+        }
       };
 
-      recognition.onerror = (event: any) => {
-        setError('Error occurred in recognition: ' + event.error);
+      recognition.onerror = (event: Event) => {
+        console.error('Speech recognition error:', event);
+        setError('Failed to recognize speech. Please try again.');
         stopListening();
       };
 
@@ -163,129 +306,25 @@ export default function Dashboard() {
         stopListening();
       };
 
+      setIsListening(true);
       recognition.start();
     } catch (error) {
       setError('Failed to start voice recognition. Please try again.');
       setIsListening(false);
     }
-  };
+  }, [debouncedSearchContacts, stopListening]);
 
-  function debounce(func: Function, wait: number) {
-    let timeout: NodeJS.Timeout;
-    return function (...args: any[]) {
-      clearTimeout(timeout);
-      timeout = setTimeout(() => {
-        func.apply(this, args);
-      }, wait);
-    };
-  }
-
-  const toggleContactSelection = (email: string) => {
-    const newSelectedContacts = new Set(selectedContacts);
-    if (newSelectedContacts.has(email)) {
-      newSelectedContacts.delete(email);
-    } else {
-      newSelectedContacts.add(email);
-    }
-    setSelectedContacts(newSelectedContacts);
-  };
-
-  const debouncedSearchContacts = useCallback(
-    debounce((query: string) => {
-      // Don't search if query is too short
-      if (query.length < 2) {
-        setMeetingSummary(prev => ({
-          contacts: [],
-          type: undefined,
-          confidence: 0,
-          suggestedTimes: prev?.suggestedTimes || []
-        }));
-        setIsProcessing(false);
-        return;
+  const toggleContactSelection = useCallback((email: string) => {
+    setSelectedContacts(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(email)) {
+        newSet.delete(email);
+      } else {
+        newSet.add(email);
       }
-
-      const searchContacts = async () => {
-        try {
-          setIsProcessing(true);
-          setError(null);
-
-          const response = await fetch(`/api/contacts/search?q=${encodeURIComponent(query)}`);
-          const data = await response.json();
-
-          if (!response.ok) {
-            throw new Error(data.error || 'Failed to search contacts');
-          }
-
-          if (data.contacts) {
-            // Flatten all contact results while maintaining uniqueness by email
-            const allContacts = Object.values(data.contacts)
-              .flat()
-              .filter((contact: any): contact is Contact => 
-                typeof contact === 'object' && 
-                contact !== null && 
-                'email' in contact
-              )
-              .filter((contact: Contact, index: number, self: Contact[]) => 
-                index === self.findIndex((c: Contact) => c.email === contact.email)
-              );
-
-            const detectedType = detectMeetingType(query);
-            
-            // Update meeting summary with all found contacts
-            setMeetingSummary(prev => ({
-              contacts: allContacts,
-              type: detectedType.type,
-              confidence: detectedType.confidence,
-              suggestedTimes: prev?.suggestedTimes || []
-            }));
-
-            // Update selected contacts - only auto-select if confidence is very high
-            const newSelectedContacts = new Set(selectedContacts);
-            allContacts.forEach((contact: Contact) => {
-              if (contact.confidence >= 0.9) {
-                newSelectedContacts.add(contact.email);
-              }
-            });
-
-            setSelectedContacts(newSelectedContacts);
-          }
-        } catch (error) {
-          console.error('Failed to search contacts:', error);
-          setError(error instanceof Error ? error.message : 'Failed to search contacts');
-        } finally {
-          setIsProcessing(false);
-        }
-      };
-
-      searchContacts();
-    }, 300),
-    [selectedContacts]
-  );
-
-  const handlePromptChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const newValue = e.target.value;
-    setPrompt(newValue);
-    if (newValue.trim()) {
-      debouncedSearchContacts(newValue);
-    } else {
-      setMeetingSummary(null);
-      setSelectedContacts(new Set());
-    }
-  };
-
-  useEffect(() => {
-    console.log('Suggested contacts updated:', selectedContacts);
-    console.log('Meeting summary updated:', meetingSummary);
-  }, [selectedContacts, meetingSummary]);
-
-  useEffect(() => {
-    if (prompt) {
-      debouncedSearchContacts(prompt);
-    } else {
-      setMeetingSummary(null);
-      setSelectedContacts(new Set());
-    }
-  }, [prompt, debouncedSearchContacts]);
+      return newSet;
+    });
+  }, []);
 
   const fetchInvites = useCallback(async () => {
     try {
@@ -344,51 +383,43 @@ export default function Dashboard() {
     }
   }, [router.query, initialPrompt]);
 
-  if (status === 'loading') {
-    return (
-      <div className="min-h-screen bg-black text-white flex items-center justify-center">
-        <div className="text-teal-500">Loading...</div>
-      </div>
-    );
-  }
+  const handleCreateMeetini = useCallback(async () => {
+    if (!prompt.trim() || selectedContacts.size === 0) return;
 
-  if (!session) {
-    return null;
-  }
+    setIsProcessing(true);
+    setError(null);
 
-  const toggleEvent = (eventId: string) => {
-    setExpandedEvents(prev => 
-      prev.includes(eventId) 
-        ? prev.filter(id => id !== eventId)
-        : [...prev, eventId]
-    );
-  };
+    try {
+      const response = await fetch('/api/meetini/ai-create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: prompt,
+          participants: Array.from(selectedContacts)
+        }),
+      });
 
-  // Group events by month
-  const groupedEvents = events.reduce((groups: { [key: string]: CalendarEvent[] }, event) => {
-    const date = new Date(event.start.dateTime || event.start.date || Date.now());
-    const monthYear = date.toLocaleString('default', { month: 'long', year: 'numeric' });
-    if (!groups[monthYear]) {
-      groups[monthYear] = [];
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to create Meetini');
+      }
+
+      showToast('success', '✨ Success! Sending invitations...');
+      setPrompt('');
+      setSelectedContacts(new Set());
+      setMeetingSummary(null);
+      await fetchInvites();
+    } catch (err) {
+      console.error('Failed to create Meetini:', err);
+      setError(err instanceof Error ? err.message : 'An error occurred');
+      showToast('error', 'Failed to create Meetini. Please try again.');
+    } finally {
+      setIsProcessing(false);
     }
-    groups[monthYear].push(event);
-    return groups;
-  }, {});
+  }, [prompt, selectedContacts, fetchInvites]);
 
-  const filteredInvites = meetiniInvites.filter(invite => invite.type === activeTab);
-
-  const getStatusColor = (status: MeetiniInvite['status']) => {
-    switch (status) {
-      case 'accepted':
-        return 'text-green-500';
-      case 'declined':
-        return 'text-red-500';
-      default:
-        return 'text-yellow-500';
-    }
-  };
-
-  const handleInviteAction = async (id: string, action: 'accept' | 'decline' | 'cancel') => {
+  const handleInviteAction = useCallback(async (id: string, action: 'accept' | 'decline' | 'cancel') => {
     const confirmActions = {
       accept: {
         title: 'Accept Invitation',
@@ -413,30 +444,24 @@ export default function Dashboard() {
       isOpen: true,
       title,
       message,
+      type,
       onClose: () => setConfirmDialog(prev => ({ ...prev, isOpen: false })),
       onConfirm: async () => {
         try {
-          // First update the invitation status
           const response = await fetch('/api/meetini', {
             method: 'PUT',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ id, action }),
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id, action })
           });
 
           const data = await response.json();
-          
           if (!response.ok) throw new Error(data.error);
-          
-          // If accepting, create calendar invitation
+
           if (action === 'accept') {
             const calendarResponse = await fetch('/api/calendar/invite', {
               method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({ invitationId: id }),
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ invitationId: id })
             });
 
             if (!calendarResponse.ok) {
@@ -445,47 +470,181 @@ export default function Dashboard() {
             }
           }
 
-          // Update local state based on the action
-          if (action === 'cancel') {
-            setMeetiniInvites(prev => prev.filter(invite => invite.id !== id));
-          } else {
-            setMeetiniInvites(prev => 
-              prev.map(invite => 
-                invite.id === id 
-                  ? { ...invite, status: action === 'accept' ? 'accepted' : 'declined' }
-                  : invite
-              )
+          setMeetiniInvites(prev => {
+            if (action === 'cancel') {
+              return prev.filter(invite => invite.id !== id);
+            }
+            return prev.map(invite => 
+              invite.id === id 
+                ? { ...invite, status: action === 'accept' ? 'accepted' : 'declined' }
+                : invite
             );
-          }
+          });
+
+          showToast('success', `Successfully ${action}ed the invitation`);
+          setConfirmDialog(prev => ({ ...prev, isOpen: false }));
         } catch (error) {
           console.error('Failed to update invitation:', error);
           setError(error instanceof Error ? error.message : 'Failed to update invitation');
+          showToast('error', 'Failed to update invitation');
         }
-      },
-      type
+      }
     });
-  };
+  }, [showToast]);
 
-  function detectMeetingType(prompt: string): { type: string; confidence: number } {
-    const prompt_lower = prompt.toLowerCase();
-  
-    // Meeting type patterns
+  const detectMeetingType = useCallback((prompt: string): { type: string; confidence: number } => {
+    const promptLower = prompt.toLowerCase();
+    
+    // Meeting type patterns based on our memories
     const patterns = {
-      'in-person': ['in person', 'in-person', 'coffee', 'lunch', 'dinner', 'meet up', 'office'],
+      'coffee-chat': ['coffee', 'coffee chat', 'grab coffee', 'get coffee'],
+      'happy-hour': ['happy hour', 'drinks', 'beer', 'wine'],
       'virtual': ['virtual', 'zoom', 'teams', 'google meet', 'online', 'call', 'video'],
+      'in-person': ['in person', 'in-person', 'lunch', 'dinner', 'meet up', 'office']
     };
 
-    // Check each type
+    // Check each type with exact phrase matching
     for (const [type, keywords] of Object.entries(patterns)) {
       for (const keyword of keywords) {
-        if (prompt_lower.includes(keyword)) {
-          return { type, confidence: 0.9 };
+        if (promptLower.includes(keyword)) {
+          // Higher confidence for exact phrase matches
+          return { type, confidence: keyword.includes(' ') ? 0.95 : 0.9 };
         }
       }
     }
 
     // Default to in-person with lower confidence
     return { type: 'in-person', confidence: 0.6 };
+  }, []);
+
+  const groupedEvents = useMemo(() => {
+    return events.reduce((groups: { [key: string]: CalendarEvent[] }, event) => {
+      const date = new Date(event.start.dateTime || event.start.date || Date.now());
+      const monthYear = date.toLocaleString('default', { month: 'long', year: 'numeric' });
+      if (!groups[monthYear]) {
+        groups[monthYear] = [];
+      }
+      groups[monthYear].push(event);
+      return groups;
+    }, {});
+  }, [events]);
+
+  const filteredInvites = useMemo(() => 
+    meetiniInvites.filter(invite => invite.type === activeTab),
+    [meetiniInvites, activeTab]
+  );
+
+  const getStatusColor = useCallback((status: MeetiniInvite['status']) => {
+    switch (status) {
+      case 'accepted':
+        return 'text-green-500';
+      case 'declined':
+        return 'text-red-500';
+      default:
+        return 'text-yellow-500';
+    }
+  }, []);
+
+  const toggleEvent = useCallback((eventId: string) => {
+    setExpandedEvents(prev => {
+      const isExpanded = prev.includes(eventId);
+      return isExpanded 
+        ? prev.filter(id => id !== eventId)
+        : [...prev, eventId];
+    });
+  }, []);
+
+  const ContactDisplay = useCallback(({ contact, isSelected }: { contact: Contact; isSelected: boolean }) => {
+    const initials = contact.name
+      .split(' ')
+      .map(n => n[0])
+      .join('')
+      .toUpperCase();
+
+    const lastContactDate = contact.lastContact 
+      ? new Date(contact.lastContact).toLocaleDateString()
+      : 'No recent contact';
+
+    return (
+      <div
+        className={`flex items-center p-4 rounded-lg transition-all ${
+          isSelected 
+            ? 'bg-teal-500/20 border border-teal-500' 
+            : 'bg-gray-800 hover:bg-gray-700 border border-transparent'
+        }`}
+      >
+        <div className="flex-shrink-0">
+          <div className="w-12 h-12 rounded-full bg-teal-500 flex items-center justify-center text-white font-semibold">
+            {initials}
+          </div>
+        </div>
+        <div className="ml-4 flex-grow">
+          <div className="flex justify-between items-start">
+            <div>
+              <h4 className="font-medium text-white">{contact.name}</h4>
+              <p className="text-sm text-gray-400">{contact.email}</p>
+            </div>
+            <div className="text-right">
+              <div className="text-sm text-gray-400">
+                {contact.frequency > 0 && (
+                  <span className="inline-flex items-center px-2 py-1 rounded-full bg-gray-700 text-xs">
+                    {contact.frequency} recent interactions
+                  </span>
+                )}
+              </div>
+              <div className="text-xs text-gray-500 mt-1">
+                Last contact: {lastContactDate}
+              </div>
+            </div>
+          </div>
+        </div>
+        <div className="ml-4 flex-shrink-0">
+          <div className={`w-4 h-4 rounded-full border-2 transition-colors ${
+            isSelected ? 'bg-teal-500 border-teal-500' : 'border-gray-500'
+          }`} />
+        </div>
+      </div>
+    );
+  }, []);
+
+  const ContactList = useCallback(() => {
+    if (!meetingSummary?.contacts.length) {
+      return null;
+    }
+
+    return (
+      <div className="mt-4 space-y-2 max-h-96 overflow-y-auto">
+        <div className="sticky top-0 bg-gray-900 p-2 z-10">
+          <h4 className="text-sm font-medium text-gray-400">
+            {selectedContacts.size} contacts selected
+          </h4>
+        </div>
+        {meetingSummary.contacts.map((contact) => (
+          <button
+            key={contact.email}
+            className="w-full text-left"
+            onClick={() => toggleContactSelection(contact.email)}
+          >
+            <ContactDisplay
+              contact={contact}
+              isSelected={selectedContacts.has(contact.email)}
+            />
+          </button>
+        ))}
+      </div>
+    );
+  }, [meetingSummary?.contacts, selectedContacts, toggleContactSelection]);
+
+  if (status === 'loading') {
+    return (
+      <div className="min-h-screen bg-black text-white flex items-center justify-center">
+        <div className="text-teal-500">Loading...</div>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return null;
   }
 
   return (
@@ -495,7 +654,7 @@ export default function Dashboard() {
         <div className="bg-gray-900 p-8 rounded-lg mb-16">
           <div className="max-w-3xl mx-auto">
             <h3 className="text-xl font-semibold text-white mb-4">Schedule a Meeting</h3>
-            <p className="text-gray-400 mb-6">Tell me what kind of meeting you want to schedule or set it up manually.</p>
+            <p className="text-gray-400 mb-6">Tell me what kind of meeting you want to schedule and with whom.</p>
             
             <div className="relative mb-6">
               <textarea
@@ -505,6 +664,7 @@ export default function Dashboard() {
                 className={`w-full p-4 bg-gray-800 text-white rounded-lg mb-2 min-h-[100px] resize-none transition-opacity ${
                   isProcessing ? 'opacity-50' : 'opacity-100'
                 }`}
+                disabled={isProcessing}
               />
               
               <button
@@ -520,6 +680,12 @@ export default function Dashboard() {
               </button>
             </div>
 
+            {error && (
+              <div className="mb-4 p-3 bg-red-500/10 border border-red-500 rounded text-red-500">
+                {error}
+              </div>
+            )}
+
             {meetingSummary && (
               <div className="mb-6 p-4 bg-gray-800 rounded-lg">
                 <h4 className="text-sm font-medium text-gray-400 mb-3">Meeting Summary</h4>
@@ -527,32 +693,7 @@ export default function Dashboard() {
                   {/* Participants */}
                   <div className="space-y-2">
                     <h5 className="text-xs font-medium text-gray-500">PARTICIPANTS</h5>
-                    <div className="space-y-2">
-                      {meetingSummary.contacts.map((contact) => (
-                        <div 
-                          key={contact.email} 
-                          className={`flex items-center justify-between text-sm p-2 rounded cursor-pointer transition-colors ${
-                            selectedContacts.has(contact.email) 
-                              ? 'bg-teal-500/20 hover:bg-teal-500/30' 
-                              : 'hover:bg-gray-700'
-                          }`}
-                          onClick={() => toggleContactSelection(contact.email)}
-                        >
-                          <div className="flex items-center space-x-2">
-                            <div className={`w-2 h-2 rounded-full ${
-                              selectedContacts.has(contact.email) ? 'bg-teal-500' : 'bg-gray-500'
-                            }`}></div>
-                            <span className="text-white">{contact.name}</span>
-                            {contact.matchedName && (
-                              <span className="text-gray-500 text-xs">
-                                (matched: {contact.matchedName})
-                              </span>
-                            )}
-                          </div>
-                          <span className="text-gray-400 text-xs">{contact.email}</span>
-                        </div>
-                      ))}
-                    </div>
+                    <ContactList />
                   </div>
 
                   {/* Meeting Type */}
@@ -567,29 +708,31 @@ export default function Dashboard() {
                       </div>
                     </div>
                   )}
+
+                  {/* Create Button */}
+                  <div className="pt-4">
+                    <button
+                      onClick={handleCreateMeetini}
+                      disabled={isProcessing || selectedContacts.size === 0}
+                      className={`w-full px-6 py-3 bg-teal-500 text-white rounded-lg transition-colors ${
+                        isProcessing || selectedContacts.size === 0 
+                          ? 'opacity-50 cursor-not-allowed' 
+                          : 'hover:bg-teal-600'
+                      }`}
+                    >
+                      {isProcessing ? 'Creating Meetini...' : 'Create Meetini'}
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
 
             <div className="flex justify-center space-x-4">
               <Link href="/settings">
-                <button className="px-6 py-3 bg-teal-500 text-white rounded-lg hover:bg-teal-600 transition-colors whitespace-nowrap flex items-center justify-center space-x-2">
-                  <span>Customize Your Meetini's 🍸 Settings</span>
+                <button className="px-6 py-3 bg-gray-700 text-white rounded-lg hover:bg-gray-600 transition-colors whitespace-nowrap flex items-center justify-center space-x-2">
+                  <span>Customize Settings 🍸</span>
                 </button>
               </Link>
-              <button
-                onClick={() => setIsCreateModalOpen(true)}
-                className="px-6 py-3 bg-teal-500 text-white rounded-lg hover:bg-teal-600 transition-colors"
-                disabled={isProcessing}
-              >
-                Create Meetini
-              </button>
-              <button
-                onClick={() => setShowManualSetup(true)}
-                className="px-6 py-3 bg-gray-700 text-white rounded-lg hover:bg-gray-600 transition-colors"
-              >
-                Manual Setup
-              </button>
             </div>
           </div>
         </div>
@@ -748,36 +891,27 @@ export default function Dashboard() {
             )}
           </div>
         </div>
+
+        {confirmDialog.isOpen && (
+          <ConfirmationDialog
+            isOpen={confirmDialog.isOpen}
+            title={confirmDialog.title}
+            message={confirmDialog.message}
+            onClose={confirmDialog.onClose}
+            onConfirm={confirmDialog.onConfirm}
+            type={confirmDialog.type}
+          />
+        )}
+
+        {toast.show && (
+          <Toast
+            show={toast.show}
+            message={toast.message}
+            type={toast.type}
+            onClose={toast.onClose}
+          />
+        )}
       </div>
-
-      {isCreateModalOpen && (
-        <CreateMeetiniForm
-          isOpen={isCreateModalOpen}
-          onClose={() => setIsCreateModalOpen(false)}
-          onSuccess={() => {}}
-          initialPrompt={initialPrompt}
-        />
-      )}
-
-      {confirmDialog.isOpen && (
-        <ConfirmationDialog
-          isOpen={confirmDialog.isOpen}
-          title={confirmDialog.title}
-          message={confirmDialog.message}
-          onClose={confirmDialog.onClose}
-          onConfirm={confirmDialog.onConfirm}
-          type={confirmDialog.type}
-        />
-      )}
-
-      {toast.show && (
-        <Toast
-          show={toast.show}
-          message={toast.message}
-          type={toast.type}
-          onClose={toast.onClose}
-        />
-      )}
     </div>
   );
 }
