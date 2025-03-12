@@ -42,95 +42,74 @@ interface FormData {
   };
 }
 
-export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialPrompt, mode }: CreateMeetiniFormProps) {
-  const [creationMode, setCreationMode] = useState<'ai' | 'manual' | null>(mode || (initialPrompt ? 'ai' : null));
+interface ContactSearchResult {
+  name: string;
+  email: string;
+  frequency: number;
+  lastContact: Date;
+  confidence: number;
+  matchedName: string;
+}
+
+export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialPrompt }: CreateMeetiniFormProps) {
+  const [searchResults, setSearchResults] = useState<{ [key: string]: ContactSearchResult[] }>({});
+  const [selectedContacts, setSelectedContacts] = useState<ContactSearchResult[]>([]);
   const [aiPrompt, setAiPrompt] = useState(initialPrompt || '');
-  const [isListening, setIsListening] = useState(false);
-  const [formData, setFormData] = useState<FormData>({
-    title: '',
-    contacts: [],
-    location: '',
-    proposedTimes: [new Date(new Date().setHours(new Date().getHours() + 1, 0, 0, 0)).toISOString()], // Default to next hour
-    preferences: {
-      timePreference: undefined,
-      durationType: undefined,
-      locationType: undefined,
-    }
-  });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [processingStatus, setProcessingStatus] = useState<string | null>(null);
-  const [newContact, setNewContact] = useState('');
-  const [isContactPickerAvailable, setIsContactPickerAvailable] = useState(false);
-  const [isSelectingContacts, setIsSelectingContacts] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [voiceState, setVoiceState] = useState({
-    isProcessing: false,
-    requiredInfo: {
-      who: false,
-      what: false,
-      when: false,
-      where: false,
-    },
-    currentQuestion: null as string | null,
-  });
-  const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
-  const [audioContext, setAudioContext] = useState<AudioContext | null>(null);
 
+  // Handle contact search when prompt changes
   useEffect(() => {
-    if (initialPrompt) {
-      setCreationMode('ai');
-      setAiPrompt(initialPrompt);
-    }
-  }, [initialPrompt]);
-
-  useEffect(() => {
-    setIsContactPickerAvailable(isContactPickerSupported());
-  }, []);
-
-  useEffect(() => {
-    let timeoutId: NodeJS.Timeout;
-    
-    if (isListening) {
-      // Stop recording after 30 seconds
-      timeoutId = setTimeout(() => {
-        console.log('Recording timeout reached');
-        stopVoiceRecording();
-      }, 30000);
-    }
-
-    return () => {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
+    const searchContacts = async () => {
+      if (!aiPrompt) return;
+      
+      try {
+        const response = await fetch(`/api/contacts/search?q=${encodeURIComponent(aiPrompt)}`);
+        const data = await response.json();
+        setSearchResults(data);
+      } catch (err) {
+        console.error('Failed to search contacts:', err);
       }
     };
-  }, [isListening]);
 
-  const handleAISubmit = async (e: React.FormEvent) => {
+    const debounceTimer = setTimeout(searchContacts, 300);
+    return () => clearTimeout(debounceTimer);
+  }, [aiPrompt]);
+
+  const handleContactToggle = (contact: ContactSearchResult) => {
+    setSelectedContacts(prev => {
+      const exists = prev.find(c => c.email === contact.email);
+      if (exists) {
+        return prev.filter(c => c.email !== contact.email);
+      } else {
+        return [...prev, contact];
+      }
+    });
+  };
+
+  const handleCreateMeetini = async (e: React.FormEvent) => {
     e.preventDefault();
-    setProcessingStatus('🤖 Analyzing your request...');
+    if (!aiPrompt.trim() || selectedContacts.length === 0) return;
+
     setIsSubmitting(true);
+    setProcessingStatus('🤖 Creating your Meetini...');
+    setError(null);
 
     try {
-      console.log('AI Prompt:', aiPrompt);
-      console.log('Sending AI request with prompt:', aiPrompt);
-
       const response = await fetch('/api/meetini/ai-create', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          prompt: aiPrompt
+          prompt: aiPrompt,
+          participants: selectedContacts.map(c => c.email)
         }),
       });
 
       const data = await response.json();
 
       if (!response.ok) {
-        if (data.code === 'NOT_AUTHENTICATED') {
-          throw new Error('Please sign in to create a Meetini');
-        }
-        throw new Error(data.error || 'Failed to process request');
+        throw new Error(data.error || 'Failed to create Meetini');
       }
 
       setProcessingStatus('✨ Success! Sending invitations...');
@@ -139,262 +118,51 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
         onClose();
       }, 1500);
     } catch (err) {
-      console.error(err);
+      console.error('Failed to create Meetini:', err);
       setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const handleManualSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setProcessingStatus('📋 Creating invitation...');
-    setIsSubmitting(true);
-
-    try {
-      // Validate form
-      if (!formData.title.trim()) {
-        throw new Error('Title is required');
-      }
-      if (!formData.contacts.length) {
-        throw new Error('At least one participant is required');
-      }
-      if (!formData.proposedTimes.length) {
-        throw new Error('At least one proposed time is required');
-      }
-
-      const requestBody = {
-        title: formData.title.trim(),
-        contacts: formData.contacts,
-        location: formData.location.trim(),
-        preferences: formData.preferences,
-        proposedTimes: formData.proposedTimes.map(time => new Date(time).toISOString())
-      };
-
-      console.log('Submitting request:', requestBody);
-
-      const response = await fetch('/api/meetini', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
-        credentials: 'same-origin',
-      });
-
-      console.log('Response status:', response.status);
-      console.log('Response headers:', Object.fromEntries(response.headers.entries()));
-
-      const data = await response.json();
-      console.log('Response data:', data);
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to create invitation');
-      }
-
-      setProcessingStatus('✨ Success! Your Meetini has been created.');
-      setTimeout(() => {
-        onSuccess();
-        onClose();
-      }, 1500);
-    } catch (err) {
-      console.error('Submission error:', err);
-      const errorMessage = err instanceof Error ? err.message : 'An error occurred';
-      setProcessingStatus(`❌ ${errorMessage}`);
-    } finally {
-      setTimeout(() => {
-        setIsSubmitting(false);
-        setProcessingStatus(null);
-      }, 5000);
-    }
-  };
-
-  const processVoiceInput = (transcript: string) => {
-    setAiPrompt(prev => prev ? `${prev} ${transcript}` : transcript);
-  };
-
-  const getNextQuestion = (info: typeof voiceState.requiredInfo) => {
-    if (!info.who) return "Who would you like to meet with?";
-    if (!info.what) return "What type of meeting would you like to schedule?";
-    if (!info.when) return "When would you prefer to meet?";
-    if (!info.where) return "Where would you like to meet?";
-    return null;
-  };
-
-  const stopVoiceRecording = () => {
-    if (mediaRecorder && mediaRecorder.state === 'recording') {
-      mediaRecorder.stop();
-      setIsListening(false);
-      setVoiceState(prev => ({ ...prev, recordingStatus: 'transcribing' }));
-    }
-  };
-
-  const startVoiceRecording = async () => {
-    if (!('webkitSpeechRecognition' in window)) {
-      setError('Speech recognition is not supported in your browser. Please use Chrome.');
-      return;
-    }
-
-    try {
-      if (isListening) {
-        stopVoiceRecording();
-        return;
-      }
-
-      setIsListening(true);
-      setError(null);
-
-      // @ts-ignore - webkitSpeechRecognition is not in TypeScript types
-      const recognition = new window.webkitSpeechRecognition();
-      recognition.continuous = true; // Allow continuous recording
-      recognition.interimResults = true;
-      recognition.maxAlternatives = 1;
-      recognition.lang = 'en-US';
-
-      let finalTranscript = '';
-
-      recognition.onstart = () => {
-        console.log('Speech recognition started');
-        setError(null);
-      };
-
-      recognition.onresult = (event: any) => {
-        let interimTranscript = '';
+  const renderContactResult = (contact: ContactSearchResult) => {
+    const isSelected = selectedContacts.some(c => c.email === contact.email);
+    const lastContactDate = new Date(contact.lastContact).toLocaleDateString();
+    
+    return (
+      <div 
+        key={contact.email}
+        className={`flex items-center p-3 rounded-lg cursor-pointer transition-all ${
+          isSelected ? 'bg-teal-100 dark:bg-teal-900' : 'hover:bg-gray-100 dark:hover:bg-gray-800'
+        }`}
+        onClick={() => handleContactToggle(contact)}
+      >
+        <div className="flex items-center justify-center w-6 h-6 mr-3">
+          {isSelected ? (
+            <svg className="w-5 h-5 text-teal-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+            </svg>
+          ) : (
+            <svg className="w-5 h-5 text-gray-400 hover:text-teal-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+            </svg>
+          )}
+        </div>
         
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          const transcript = event.results[i][0].transcript;
-          if (event.results[i].isFinal) {
-            finalTranscript += transcript + ' ';
-          } else {
-            interimTranscript += transcript;
-          }
-        }
-
-        // Update the prompt with both final and interim results
-        setAiPrompt(finalTranscript + interimTranscript);
-      };
-
-      recognition.onerror = (event: any) => {
-        console.error('Speech recognition error:', event.error);
-        if (event.error === 'no-speech') {
-          setError('No speech detected. Please try again and speak clearly.');
-        } else if (event.error === 'audio-capture') {
-          setError('No microphone detected. Please check your microphone settings.');
-        } else if (event.error === 'not-allowed') {
-          setError('Microphone access denied. Please allow microphone access and try again.');
-        } else {
-          setError('Failed to recognize speech. Please try again.');
-        }
-        stopVoiceRecording();
-      };
-
-      recognition.onend = () => {
-        console.log('Speech recognition ended');
-        setIsListening(false);
-        // Only set final transcript if we have content
-        if (finalTranscript.trim()) {
-          setAiPrompt(finalTranscript.trim());
-        }
-      };
-
-      recognition.start();
-      // Store the recognition instance
-      // @ts-ignore - adding to window for cleanup
-      window.recognition = recognition;
-
-      // Automatically stop after 15 seconds
-      setTimeout(() => {
-        if (window.recognition) {
-          window.recognition.stop();
-        }
-      }, 15000);
-
-    } catch (error) {
-      console.error('Error starting speech recognition:', error);
-      setError('Failed to start speech recognition. Please try again.');
-      setIsListening(false);
-    }
-  };
-
-  const addContact = () => {
-    const contact = validateContact(newContact);
-    if (contact) {
-      console.log('Adding contact:', contact);
-      setFormData(prev => {
-        const updatedContacts = [...prev.contacts, contact];
-        console.log('Updated contacts:', updatedContacts);
-        return {
-          ...prev,
-          contacts: updatedContacts
-        };
-      });
-      setNewContact('');
-    } else {
-      setProcessingStatus('Invalid email or phone number format');
-      setTimeout(() => setProcessingStatus(null), 3000);
-    }
-  };
-
-  const validateContact = (value: string): Contact | null => {
-    const trimmedValue = value.trim();
-    // Email validation
-    if (trimmedValue.includes('@')) {
-      console.log('Validated email contact:', trimmedValue);
-      return { type: 'email', value: trimmedValue };
-    }
-    
-    // Phone validation (basic)
-    const phoneNumber = trimmedValue.replace(/[^0-9+]/g, '');
-    if (phoneNumber.length >= 10) {
-      console.log('Validated phone contact:', phoneNumber);
-      return { type: 'phone', value: phoneNumber };
-    }
-    
-    return null;
-  };
-
-  const removeContact = (index: number) => {
-    setFormData(prev => ({
-      ...prev,
-      contacts: prev.contacts.filter((_, i) => i !== index)
-    }));
-  };
-
-  const handleSelectContacts = async () => {
-    try {
-      setIsSelectingContacts(true);
-      
-      const selectedContacts = await selectContacts();
-      const validContacts = selectedContacts
-        .map((contact: PickedContact): ContactResult | null => {
-          if (contact.email) {
-            return {
-              type: 'email',
-              value: contact.email,
-              name: contact.name
-            };
-          }
-          if (contact.phoneNumber) {
-            return {
-              type: 'phone',
-              value: contact.phoneNumber,
-              name: contact.name
-            };
-          }
-          return null;
-        })
-        .filter((contact): contact is ContactResult => contact !== null);
-
-      setFormData(prev => ({
-        ...prev,
-        contacts: [...prev.contacts, ...validContacts]
-      }));
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setIsSelectingContacts(false);
-    }
+        <div className="flex-1">
+          <div className="flex items-center justify-between">
+            <div>
+              <h4 className="font-medium">{contact.name}</h4>
+              <p className="text-sm text-gray-500">{contact.email}</p>
+            </div>
+            <div className="text-right text-sm text-gray-500">
+              <div>{contact.frequency} interactions</div>
+              <div>Last: {lastContactDate}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   if (!isOpen) return null;
@@ -402,328 +170,93 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto">
       <div className="flex min-h-screen items-center justify-center p-4">
-        {/* Backdrop */}
         <div className="fixed inset-0 bg-black/50 transition-opacity" onClick={onClose} />
         
-        {/* Form */}
-        <div className="relative bg-gray-900 rounded-lg p-6 max-w-2xl w-full border border-gray-800">
-          <h2 className="text-xl font-semibold mb-6 text-teal-500">Create New Meetini</h2>
+        <div className="relative bg-white dark:bg-gray-900 rounded-lg p-6 max-w-2xl w-full">
+          <h2 className="text-xl font-semibold mb-6 text-gray-900 dark:text-white">Schedule a Meeting</h2>
           
-          {creationMode === null ? (
-            <div className="space-y-4">
-              <p className="text-gray-300 mb-6">Choose how you'd like to create your Meetini:</p>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <button
-                  onClick={() => setCreationMode('ai')}
-                  className="p-6 border border-teal-500 rounded-lg hover:bg-teal-500/10 transition-colors text-left"
-                >
-                  <h3 className="text-lg font-medium text-teal-500 mb-2">Quick Create with AI</h3>
-                  <p className="text-sm text-gray-400">
-                    Just tell us what you want! We'll handle the scheduling based on everyone's availability.
-                  </p>
-                </button>
-                <button
-                  onClick={() => setCreationMode('manual')}
-                  className="p-6 border border-teal-500 rounded-lg hover:bg-teal-500/10 transition-colors text-left"
-                >
-                  <h3 className="text-lg font-medium text-teal-500 mb-2">Manual Setup</h3>
-                  <p className="text-sm text-gray-400">
-                    Specify your preferences and let us find the perfect time that works for everyone.
-                  </p>
-                </button>
-              </div>
+          <div className="space-y-6">
+            <div>
+              <textarea
+                value={aiPrompt}
+                onChange={(e) => setAiPrompt(e.target.value)}
+                placeholder="Tell me what kind of meeting you want to schedule..."
+                className="w-full p-3 rounded-lg border bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                rows={3}
+              />
             </div>
-          ) : creationMode === 'ai' ? (
-            <form onSubmit={handleAISubmit} className="space-y-6">
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">
-                  What would you like to schedule?
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={aiPrompt}
-                    onChange={e => setAiPrompt(e.target.value)}
-                    className="flex-1 p-3 rounded-lg bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-teal-500 resize-none overflow-hidden"
-                    placeholder="e.g., Schedule a coffee meeting with Jane and John next week"
-                    style={{ height: 'auto' }}
-                  />
-                  <button
-                    type="button"
-                    onClick={isListening ? stopVoiceRecording : startVoiceRecording}
-                    className={`p-3 rounded-lg ${
-                      isListening 
-                        ? 'bg-red-500 hover:bg-red-600' 
-                        : 'bg-teal-500 hover:bg-teal-600'
-                    } transition-colors flex items-center gap-2`}
-                  >
-                    <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      {isListening ? (
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z M10 15l-3-3m0 0l3-3m-3 3h12" />
-                      ) : (
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                      )}
-                    </svg>
-                    <span className="text-white text-sm">
-                      {isListening ? 'Stop Recording' : 'Start Recording'}
-                    </span>
-                  </button>
-                </div>
-                <p className="mt-2 text-sm text-gray-400">
-                  Just tell us what kind of meeting you want, and we'll handle the rest!
-                </p>
-              </div>
 
-              {processingStatus && (
-                <div className="p-3 bg-teal-500/10 border border-teal-500 rounded text-teal-500">
-                  {processingStatus}
-                </div>
-              )}
-
-              <div className="flex justify-end gap-3">
-                <button
-                  type="button"
-                  onClick={() => setCreationMode(null)}
-                  className="px-4 py-2 rounded text-sm font-medium bg-gray-800 text-white hover:bg-gray-700 transition-colors"
-                >
-                  Back
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSubmitting || !aiPrompt.trim()}
-                  className="px-4 py-2 rounded text-sm font-medium bg-teal-500 text-white hover:bg-teal-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {isSubmitting ? 'Processing...' : 'Create Meetini'}
-                </button>
+            {Object.entries(searchResults).length > 0 && (
+              <div className="space-y-4">
+                <h3 className="text-lg font-medium text-gray-900 dark:text-white">Suggested Contacts</h3>
+                {Object.entries(searchResults).map(([name, contacts]) => (
+                  <div key={name} className="space-y-2">
+                    {contacts.map(contact => renderContactResult(contact))}
+                  </div>
+                ))}
               </div>
-            </form>
-          ) : (
-            <form onSubmit={handleManualSubmit} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">
-                  Title
-                </label>
-                <input
-                  type="text"
-                  value={formData.title}
-                  onChange={e => setFormData(prev => ({ ...prev, title: e.target.value }))}
-                  className="w-full p-2 rounded bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-teal-500"
-                  placeholder="e.g., Team Coffee Meeting"
-                />
-              </div>
+            )}
 
-              {/* Contact Input Section */}
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">
-                  Add Participants
-                </label>
+            {selectedContacts.length > 0 && (
+              <div className="mt-4">
+                <h3 className="text-lg font-medium mb-2 text-gray-900 dark:text-white">Selected Contacts</h3>
                 <div className="space-y-2">
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={newContact}
-                      onChange={e => setNewContact(e.target.value)}
-                      onKeyPress={e => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          addContact();
-                        }
-                      }}
-                      className="flex-1 p-2 rounded bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-teal-500"
-                      placeholder="Enter email or phone number"
-                    />
-                    <button
-                      type="button"
-                      onClick={addContact}
-                      className="px-4 py-2 bg-teal-500 text-white rounded hover:bg-teal-600 transition-colors"
+                  {selectedContacts.map(contact => (
+                    <div key={contact.email} 
+                      className="flex items-center justify-between bg-teal-50 dark:bg-teal-900/50 p-3 rounded-lg"
                     >
-                      Add
-                    </button>
-                    {isContactPickerAvailable && (
-                      <button
-                        type="button"
-                        onClick={handleSelectContacts}
-                        disabled={isSelectingContacts}
-                        className="px-4 py-2 bg-gray-700 text-white rounded hover:bg-gray-600 transition-colors flex items-center gap-2"
-                      >
-                        {isSelectingContacts ? (
-                          <>
-                            <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
-                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                            </svg>
-                            Selecting...
-                          </>
-                        ) : (
-                          <>
-                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-                            </svg>
-                            Select Contacts
-                          </>
-                        )}
-                      </button>
-                    )}
-                  </div>
-                  
-                  {/* Contact List */}
-                  <div className="space-y-2">
-                    {formData.contacts.map((contact, index) => (
-                      <div
-                        key={index}
-                        className="flex items-center justify-between p-2 rounded bg-gray-800 border border-gray-700"
-                      >
-                        <div className="flex items-center gap-2">
-                          <span className={`text-xs px-2 py-1 rounded ${
-                            contact.type === 'email' ? 'bg-blue-500/20 text-blue-400' : 'bg-green-500/20 text-green-400'
-                          }`}>
-                            {contact.type === 'email' ? 'Email' : 'Phone'}
-                          </span>
-                          <span className="text-gray-300">{contact.value}</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => removeContact(index)}
-                          className="text-gray-400 hover:text-red-500 transition-colors"
-                        >
-                          ×
-                        </button>
+                      <div>
+                        <div className="font-medium text-gray-900 dark:text-white">{contact.name}</div>
+                        <div className="text-sm text-gray-500">{contact.email}</div>
                       </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">
-                  Location Type
-                </label>
-                <select
-                  value={formData.preferences?.locationType || ''}
-                  onChange={e => setFormData(prev => ({
-                    ...prev,
-                    preferences: {
-                      ...prev.preferences,
-                      locationType: e.target.value as any
-                    }
-                  }))}
-                  className="w-full p-2 rounded bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-teal-500"
-                >
-                  <option value="">No preference</option>
-                  <option value="coffee">Coffee Shop</option>
-                  <option value="restaurant">Restaurant</option>
-                  <option value="office">Office</option>
-                  <option value="virtual">Virtual Meeting</option>
-                  <option value="custom">Custom Location</option>
-                </select>
-              </div>
-
-              {formData.preferences?.locationType === 'custom' && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-1">
-                    Custom Location
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.location}
-                    onChange={e => setFormData(prev => ({ ...prev, location: e.target.value }))}
-                    className="w-full p-2 rounded bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-teal-500"
-                    placeholder="Enter specific location"
-                  />
-                </div>
-              )}
-
-              {/* Time Selection Section */}
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">
-                  Proposed Times
-                </label>
-                <div className="space-y-2">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs text-gray-400 mb-1">Date</label>
-                      <input
-                        type="date"
-                        className="w-full p-2 rounded bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-teal-500"
-                        min={new Date().toISOString().split('T')[0]}
-                        value={formData.proposedTimes[0]?.split('T')[0] || ''}
-                        onChange={e => {
-                          const selectedDate = e.target.value;
-                          const currentTime = formData.proposedTimes[0]?.split('T')[1] || '12:00';
-                          
-                          setFormData(prev => ({
-                            ...prev,
-                            proposedTimes: [`${selectedDate}T${currentTime}`]
-                          }));
-                        }}
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs text-gray-400 mb-1">Time</label>
-                      <input
-                        type="time"
-                        className="w-full p-2 rounded bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-teal-500"
-                        value={formData.proposedTimes[0]?.split('T')[1] || '12:00'}
-                        onChange={e => {
-                          const selectedTime = e.target.value;
-                          const currentDate = formData.proposedTimes[0]?.split('T')[0] || new Date().toISOString().split('T')[0];
-                          
-                          setFormData(prev => ({
-                            ...prev,
-                            proposedTimes: [`${currentDate}T${selectedTime}`]
-                          }));
-                        }}
-                      />
-                    </div>
-                  </div>
-                  {formData.proposedTimes?.map((time, index) => (
-                    <div key={index} className="flex items-center justify-between p-2 rounded bg-gray-800 border border-gray-700">
-                      <span className="text-gray-300">
-                        {new Date(time).toLocaleString()}
-                      </span>
                       <button
-                        type="button"
-                        onClick={() => {
-                          setFormData(prev => ({
-                            ...prev,
-                            proposedTimes: prev.proposedTimes.filter((_, i) => i !== index)
-                          }));
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleContactToggle(contact);
                         }}
-                        className="text-gray-400 hover:text-red-500 transition-colors"
+                        className="p-1 hover:text-red-500 transition-colors"
                       >
-                        ×
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
                       </button>
                     </div>
                   ))}
                 </div>
               </div>
+            )}
 
-              {processingStatus && (
-                <div className="p-3 bg-teal-500/10 border border-teal-500 rounded text-teal-500">
-                  {processingStatus}
-                </div>
-              )}
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={onClose}
+                className="px-4 py-2 text-gray-600 hover:text-gray-800"
+                disabled={isSubmitting}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleCreateMeetini}
+                disabled={isSubmitting || !aiPrompt.trim() || selectedContacts.length === 0}
+                className="px-4 py-2 bg-teal-500 text-white rounded-lg hover:bg-teal-600 disabled:opacity-50"
+              >
+                {isSubmitting ? 'Creating...' : 'Create Meetini'}
+              </button>
+            </div>
 
-              <div className="flex justify-end gap-3 pt-4">
-                <button
-                  type="button"
-                  onClick={() => setCreationMode(null)}
-                  className="px-4 py-2 rounded text-sm font-medium bg-gray-800 text-white hover:bg-gray-700 transition-colors"
-                >
-                  Back
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSubmitting}
-                  className="px-4 py-2 rounded text-sm font-medium bg-teal-500 text-white hover:bg-teal-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {isSubmitting ? 'Creating...' : 'Create Meetini'}
-                </button>
+            {error && (
+              <div className="text-red-500 text-sm mt-2">
+                {error}
               </div>
-            </form>
-          )}
+            )}
+
+            {processingStatus && (
+              <div className="text-teal-500 text-sm mt-2">
+                {processingStatus}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>
   );
-} 
+}
