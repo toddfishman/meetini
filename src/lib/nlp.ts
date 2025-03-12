@@ -61,6 +61,47 @@ interface ExtractedName {
   position: number;
 }
 
+interface MeetingPattern {
+  type: string;
+  phrases: string[];
+  keywords: string[];
+  prefix?: string;
+}
+
+const meetingPatterns: MeetingPattern[] = [
+  {
+    type: 'Coffee Chat',
+    phrases: ['coffee chat', 'coffee meeting', 'grab coffee', 'get coffee'],
+    keywords: ['coffee', 'starbucks', 'cafe']
+  },
+  {
+    type: 'Happy Hour',
+    phrases: ['happy hour', 'drinks after work', 'team drinks', 'virtual happy hour'],
+    keywords: ['drinks', 'beer', 'wine', 'happy', 'hour']
+  },
+  {
+    type: 'Team Sync',
+    phrases: ['team sync', 'team meeting', 'team catchup', 'team check-in'],
+    keywords: ['sync', 'team', 'catchup', 'check-in', 'check in', 'standup']
+  },
+  {
+    type: 'Virtual Meeting',
+    phrases: ['virtual meeting', 'video call', 'zoom call', 'google meet'],
+    keywords: ['virtual', 'zoom', 'teams', 'google meet', 'online', 'call', 'video'],
+    prefix: 'Virtual'
+  },
+  {
+    type: '1:1',
+    phrases: ['1:1', 'one on one', 'one-on-one', '1 on 1'],
+    keywords: ['1:1', 'one-on-one', '1on1']
+  },
+  {
+    type: 'Lunch',
+    phrases: ['lunch meeting', 'lunch and learn', 'team lunch'],
+    keywords: ['lunch', 'meal']
+  }
+];
+
 /**
  * Detects the type of meeting from the input text
  */
@@ -102,6 +143,60 @@ export function detectMeetingType(text: string): {
   return {
     type: typeMap[sortedCategories[0][0]],
     confidence: Math.min(confidence, 1)
+  };
+}
+
+/**
+ * Detects the purpose of a meeting from the input text
+ */
+export function detectMeetingPurpose(prompt: string): { type: string; confidence: number } {
+  const promptLower = prompt.toLowerCase();
+  
+  // First, check for exact phrases with highest confidence
+  for (const pattern of meetingPatterns) {
+    for (const phrase of pattern.phrases) {
+      if (promptLower.includes(phrase)) {
+        return { 
+          type: pattern.type,
+          confidence: 0.95 
+        };
+      }
+    }
+  }
+
+  // Then check for keyword matches with medium confidence
+  for (const pattern of meetingPatterns) {
+    for (const keyword of pattern.keywords) {
+      if (promptLower.includes(keyword)) {
+        // If it's a virtual keyword and we find location markers, don't match
+        if (pattern.type === 'Virtual Meeting' && 
+            (promptLower.includes('office') || promptLower.includes('at '))) {
+          continue;
+        }
+        
+        return { 
+          type: pattern.type,
+          confidence: 0.8 
+        };
+      }
+    }
+  }
+
+  // Check for custom meeting types (e.g., "Monthly Planning", "Design Review")
+  const customTypeMatch = prompt.match(/\b(monthly|weekly|quarterly|annual|design|planning|review|strategy|brainstorm)\s+(\w+)\b/i);
+  if (customTypeMatch) {
+    const customType = titleCase(customTypeMatch[0]);
+    // If it contains virtual keywords, prefix it
+    if (promptLower.includes('virtual') || promptLower.includes('zoom') || promptLower.includes('online')) {
+      return { type: `Virtual ${customType}`, confidence: 0.85 };
+    }
+    return { type: customType, confidence: 0.85 };
+  }
+
+  // Default to a generic meeting type
+  return { 
+    type: promptLower.includes('virtual') || promptLower.includes('zoom') ? 'Virtual Meeting' : 'Meeting',
+    confidence: 0.6 
   };
 }
 
@@ -206,4 +301,16 @@ export function extractNames(text: string): string[] {
       .map(group => group.name)
       .filter(name => name.length > 2)
   )];
+}
+
+/**
+ * Formats a meeting title based on the meeting type and participants
+ */
+export function formatMeetingTitle(type: string, participants: string[]): string {
+  const participantNames = participants.map(email => {
+    const name = email.split('@')[0];
+    return titleCase(name);
+  }).join('/');
+
+  return `${type} with ${participantNames}`;
 }
