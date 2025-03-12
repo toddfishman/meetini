@@ -49,6 +49,29 @@ interface MeetingSummary {
   suggestedTimes?: string[];
 }
 
+interface CreateMeetiniFormProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onSuccess: () => void;
+  initialPrompt: string | null;
+}
+
+interface ConfirmationDialogProps {
+  isOpen: boolean;
+  title: string;
+  message: string;
+  onClose: () => void;
+  onConfirm: () => void;
+  type: 'danger' | 'success' | 'warning';
+}
+
+interface ToastProps {
+  show: boolean;
+  message: string;
+  type: 'success' | 'error';
+  onClose: () => void;
+}
+
 export default function Dashboard() {
   const { data: session, status } = useSession();
   const router = useRouter();
@@ -61,17 +84,12 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [initialPrompt, setInitialPrompt] = useState<string | null>(null);
-  const [confirmDialog, setConfirmDialog] = useState<{
-    isOpen: boolean;
-    title: string;
-    message: string;
-    action: () => void;
-    type: 'danger' | 'success' | 'warning';
-  }>({
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmationDialogProps>({
     isOpen: false,
     title: '',
     message: '',
-    action: () => {},
+    onClose: () => {},
+    onConfirm: () => {},
     type: 'warning'
   });
 
@@ -83,19 +101,19 @@ export default function Dashboard() {
   const [meetingType, setMeetingType] = useState<{ type: string | undefined; confidence: number }>({ type: undefined, confidence: 0 });
   const [meetingSummary, setMeetingSummary] = useState<MeetingSummary | null>(null);
   const [showManualSetup, setShowManualSetup] = useState(false);
-  const [toast, setToast] = useState<{
-    show: boolean;
-    type: 'success' | 'error';
-    message: string;
-  }>({
+  const [toast, setToast] = useState<ToastProps>({
     show: false,
-    type: 'success',
     message: '',
+    type: 'success',
+    onClose: () => {}
   });
 
   const showToast = (type: 'success' | 'error', message: string) => {
-    setToast({ show: true, type, message });
-    setTimeout(() => setToast({ show: false, type: 'success', message: '' }), 5000);
+    const onClose = () => setToast(prev => ({ ...prev, show: false, onClose: () => {} }));
+    setToast({ show: true, type, message, onClose });
+    setTimeout(() => {
+      setToast(prev => ({ ...prev, show: false, onClose: () => {} }));
+    }, 5000);
   };
 
   const stopListening = () => {
@@ -162,53 +180,6 @@ export default function Dashboard() {
     };
   }
 
-  const processSearchResults = async (query: string) => {
-    try {
-      setIsProcessing(true);
-      setError(null);
-
-      const response = await fetch(`/api/contacts/search?q=${encodeURIComponent(query)}`);
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to search contacts');
-      }
-
-      if (data.contacts) {
-        // Flatten all contact results while maintaining uniqueness by email
-        const allContacts = Object.values(data.contacts)
-          .flat()
-          .filter((contact: any, index: number, self: any[]) => 
-            index === self.findIndex((c: any) => c.email === contact.email)
-          );
-
-        const detectedType = detectMeetingType(query);
-        
-        // Update meeting summary with all found contacts
-        setMeetingSummary(prev => ({
-          ...prev,
-          contacts: allContacts,
-          type: detectedType.type,
-          confidence: detectedType.confidence
-        }));
-
-        // Update selected contacts
-        const newSelectedContacts = new Set(selectedContacts);
-        allContacts.forEach((contact: any) => {
-          if (contact.confidence >= 0.9) { // Auto-select high confidence matches
-            newSelectedContacts.add(contact.email);
-          }
-        });
-        setSelectedContacts(newSelectedContacts);
-      }
-    } catch (error) {
-      console.error('Error searching contacts:', error);
-      setError(error instanceof Error ? error.message : 'Failed to search contacts');
-    } finally {
-      setIsProcessing(false);
-    }
-  };
-
   const toggleContactSelection = (email: string) => {
     const newSelectedContacts = new Set(selectedContacts);
     if (newSelectedContacts.has(email)) {
@@ -220,16 +191,87 @@ export default function Dashboard() {
   };
 
   const debouncedSearchContacts = useCallback(
-    debounce(async (text: string) => {
-      if (!text?.trim() || text === previousPrompt.current) {
+    debounce((query: string) => {
+      // Don't search if query is too short
+      if (query.length < 2) {
+        setMeetingSummary(prev => ({
+          contacts: [],
+          type: undefined,
+          confidence: 0,
+          suggestedTimes: prev?.suggestedTimes || []
+        }));
+        setIsProcessing(false);
         return;
       }
-      previousPrompt.current = text;
 
-      await processSearchResults(text);
-    }, 500),
-    []
+      const searchContacts = async () => {
+        try {
+          setIsProcessing(true);
+          setError(null);
+
+          const response = await fetch(`/api/contacts/search?q=${encodeURIComponent(query)}`);
+          const data = await response.json();
+
+          if (!response.ok) {
+            throw new Error(data.error || 'Failed to search contacts');
+          }
+
+          if (data.contacts) {
+            // Flatten all contact results while maintaining uniqueness by email
+            const allContacts = Object.values(data.contacts)
+              .flat()
+              .filter((contact: any): contact is Contact => 
+                typeof contact === 'object' && 
+                contact !== null && 
+                'email' in contact
+              )
+              .filter((contact: Contact, index: number, self: Contact[]) => 
+                index === self.findIndex((c: Contact) => c.email === contact.email)
+              );
+
+            const detectedType = detectMeetingType(query);
+            
+            // Update meeting summary with all found contacts
+            setMeetingSummary(prev => ({
+              contacts: allContacts,
+              type: detectedType.type,
+              confidence: detectedType.confidence,
+              suggestedTimes: prev?.suggestedTimes || []
+            }));
+
+            // Update selected contacts - only auto-select if confidence is very high
+            const newSelectedContacts = new Set(selectedContacts);
+            allContacts.forEach((contact: Contact) => {
+              if (contact.confidence >= 0.9) {
+                newSelectedContacts.add(contact.email);
+              }
+            });
+
+            setSelectedContacts(newSelectedContacts);
+          }
+        } catch (error) {
+          console.error('Failed to search contacts:', error);
+          setError(error instanceof Error ? error.message : 'Failed to search contacts');
+        } finally {
+          setIsProcessing(false);
+        }
+      };
+
+      searchContacts();
+    }, 300),
+    [selectedContacts]
   );
+
+  const handlePromptChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const newValue = e.target.value;
+    setPrompt(newValue);
+    if (newValue.trim()) {
+      debouncedSearchContacts(newValue);
+    } else {
+      setMeetingSummary(null);
+      setSelectedContacts(new Set());
+    }
+  };
 
   useEffect(() => {
     console.log('Suggested contacts updated:', selectedContacts);
@@ -371,8 +413,8 @@ export default function Dashboard() {
       isOpen: true,
       title,
       message,
-      type,
-      action: async () => {
+      onClose: () => setConfirmDialog(prev => ({ ...prev, isOpen: false })),
+      onConfirm: async () => {
         try {
           // First update the invitation status
           const response = await fetch('/api/meetini', {
@@ -419,7 +461,8 @@ export default function Dashboard() {
           console.error('Failed to update invitation:', error);
           setError(error instanceof Error ? error.message : 'Failed to update invitation');
         }
-      }
+      },
+      type
     });
   };
 
@@ -457,10 +500,11 @@ export default function Dashboard() {
             <div className="relative mb-6">
               <textarea
                 value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
+                onChange={handlePromptChange}
                 placeholder="e.g. Schedule a coffee meeting with John tomorrow morning"
-                className="w-full p-4 bg-gray-800 text-white rounded-lg mb-2 min-h-[100px] resize-none"
-                disabled={isProcessing}
+                className={`w-full p-4 bg-gray-800 text-white rounded-lg mb-2 min-h-[100px] resize-none transition-opacity ${
+                  isProcessing ? 'opacity-50' : 'opacity-100'
+                }`}
               />
               
               <button
@@ -708,31 +752,30 @@ export default function Dashboard() {
 
       {isCreateModalOpen && (
         <CreateMeetiniForm
-          onClose={() => {
-            setIsCreateModalOpen(false);
-            setInitialPrompt(null);
-          }}
+          isOpen={isCreateModalOpen}
+          onClose={() => setIsCreateModalOpen(false)}
+          onSuccess={() => {}}
           initialPrompt={initialPrompt}
         />
       )}
 
-      <ConfirmationDialog
-        isOpen={confirmDialog.isOpen}
-        title={confirmDialog.title}
-        message={confirmDialog.message}
-        onConfirm={() => {
-          confirmDialog.action();
-          setConfirmDialog(prev => ({ ...prev, isOpen: false }));
-        }}
-        onCancel={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))}
-        type={confirmDialog.type}
-      />
+      {confirmDialog.isOpen && (
+        <ConfirmationDialog
+          isOpen={confirmDialog.isOpen}
+          title={confirmDialog.title}
+          message={confirmDialog.message}
+          onClose={confirmDialog.onClose}
+          onConfirm={confirmDialog.onConfirm}
+          type={confirmDialog.type}
+        />
+      )}
 
       {toast.show && (
         <Toast
+          show={toast.show}
           message={toast.message}
           type={toast.type}
-          onClose={() => setToast(prev => ({ ...prev, show: false }))}
+          onClose={toast.onClose}
         />
       )}
     </div>

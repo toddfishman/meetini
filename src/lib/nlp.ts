@@ -111,12 +111,20 @@ export function detectMeetingType(text: string): {
  * by checking against common meeting-related terms.
  */
 export function extractNames(text: string): string[] {
+  // Don't try to extract names if the input is too short
+  if (text.length < 3) return [];
+
   const nameGroups: ExtractedName[] = [];
   let currentGroup: string[] = [];
   let groupStart = -1;
 
   // Split and normalize input
   const words = text.toLowerCase().split(/\s+/).map(w => w.trim());
+  
+  // Only process if we have actual words
+  if (words.length === 0 || words[0].length < 2) {
+    return [];
+  }
   
   // If there's only one word and it's not in common words, treat it as a name
   if (words.length === 1 && !COMMON_WORDS.has(words[0]) && words[0].length > 1) {
@@ -128,13 +136,13 @@ export function extractNames(text: string): string[] {
     const word = words[i];
     const cleanWord = word.replace(/[.,!?]$/, '');
     
-    // Skip very short words
-    if (cleanWord.length <= 1) continue;
+    // Skip very short words or single letters
+    if (cleanWord.length < 2) continue;
 
     // Check for name group markers
     if (['with', 'and', 'for', '@'].includes(cleanWord)) {
-      // Save current group if exists
-      if (currentGroup.length > 0) {
+      // Save current group if exists and has valid length
+      if (currentGroup.length > 0 && currentGroup.join(' ').length > 1) {
         nameGroups.push({
           name: currentGroup.join(' '),
           position: groupStart
@@ -150,7 +158,7 @@ export function extractNames(text: string): string[] {
       COMMON_WORDS.has(cleanWord) ||
       /^\d{1,2}(:\d{2})?([ap]m)?$/i.test(cleanWord)
     ) {
-      if (currentGroup.length > 0) {
+      if (currentGroup.length > 0 && currentGroup.join(' ').length > 1) {
         nameGroups.push({
           name: currentGroup.join(' '),
           position: groupStart
@@ -172,7 +180,7 @@ export function extractNames(text: string): string[] {
       ['with', 'and', 'for', '@'].includes(nextWord) ||
       COMMON_WORDS.has(nextWord)
     ) {
-      if (currentGroup.length > 0) {
+      if (currentGroup.length > 0 && currentGroup.join(' ').length > 1) {
         nameGroups.push({
           name: currentGroup.join(' '),
           position: groupStart
@@ -183,15 +191,15 @@ export function extractNames(text: string): string[] {
     }
   }
 
-  // Add any remaining group
-  if (currentGroup.length > 0) {
+  // Add any remaining group if it has valid length
+  if (currentGroup.length > 0 && currentGroup.join(' ').length > 1) {
     nameGroups.push({
       name: currentGroup.join(' '),
       position: groupStart
     });
   }
 
-  // Sort by position and return unique names
+  // Sort by position and return unique names with minimum length
   return [...new Set(
     nameGroups
       .sort((a, b) => a.position - b.position)

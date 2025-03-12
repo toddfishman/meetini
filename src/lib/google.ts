@@ -24,9 +24,9 @@ const searchCache = new Map<string, {
 }>();
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
-function buildEmailQuery(names: string[]): string {
-  // Build a more precise query for exact matches
-  const queryParts = names.map(name => {
+function buildEmailQuery(names: string[]): string[] {
+  // Create separate queries for each name to ensure we get results for all
+  return names.map(name => {
     const nameParts = name.split(' ');
     const exactMatch = `"${name}"`;
     
@@ -37,8 +37,6 @@ function buildEmailQuery(names: string[]): string {
     
     return exactMatch;
   });
-
-  return queryParts.join(' OR ');
 }
 
 function getExactNameMatchScore(contactName: string, searchName: string): number {
@@ -80,18 +78,27 @@ export async function searchEmailContacts(req: NextApiRequest, names: string[]):
     const oauth2Client = new google.auth.OAuth2();
     oauth2Client.setCredentials({ access_token: token.accessToken });
 
-    const query = buildEmailQuery(names);
-    console.log('Gmail search query:', query);
+    const queries = buildEmailQuery(names);
+    console.log('Gmail search queries:', queries);
 
-    // Get messages
-    const response = await gmail.users.messages.list({
-      auth: oauth2Client,
-      userId: 'me',
-      q: query,
-      maxResults: 50 // Increased to ensure we find matches for all names
-    });
+    // Get messages for each name in parallel
+    const messagePromises = queries.map(query => 
+      gmail.users.messages.list({
+        auth: oauth2Client,
+        userId: 'me',
+        q: query,
+        maxResults: 25 // Reduced per name since we're searching multiple times
+      })
+    );
 
-    if (!response.data.messages?.length) {
+    const responses = await Promise.all(messagePromises);
+    const allMessageIds = new Set(
+      responses
+        .flatMap(response => response.data.messages || [])
+        .map(msg => msg.id!)
+    );
+
+    if (allMessageIds.size === 0) {
       const emptyResults: ContactSearchResults = {};
       names.forEach(name => { emptyResults[name] = []; });
       searchCache.set(cacheKey, { timestamp: Date.now(), results: emptyResults });
@@ -103,12 +110,12 @@ export async function searchEmailContacts(req: NextApiRequest, names: string[]):
     names.forEach(name => contactsByName.set(name, new Map()));
     
     await Promise.all(
-      response.data.messages.map(async message => {
+      Array.from(allMessageIds).map(async messageId => {
         try {
           const details = await gmail.users.messages.get({
             auth: oauth2Client,
             userId: 'me',
-            id: message.id!,
+            id: messageId,
             format: 'metadata',
             metadataHeaders: ['From', 'To', 'Date']
           });
