@@ -297,12 +297,18 @@ export default function Dashboard() {
       };
 
       recognition.onerror = (event: Event) => {
-        console.error('Speech recognition error:', event);
-        setError('Failed to recognize speech. Please try again.');
+        // Only show error if it's not a "no-speech" error when stopping
+        const error = event as unknown as { error: string };
+        if (error.error !== 'no-speech') {
+          console.error('Speech recognition error:', event);
+          setError('Failed to recognize speech. Please try again.');
+        }
         stopListening();
       };
 
       recognition.onend = () => {
+        // Don't show any error when intentionally stopping
+        setError(null);
         stopListening();
       };
 
@@ -383,115 +389,7 @@ export default function Dashboard() {
     }
   }, [router.query, initialPrompt]);
 
-  const handleCreateMeetini = useCallback(async () => {
-    if (!prompt.trim() || selectedContacts.size === 0) return;
-
-    setIsProcessing(true);
-    setError(null);
-
-    try {
-      const response = await fetch('/api/meetini/ai-create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt: prompt,
-          participants: Array.from(selectedContacts)
-        }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to create Meetini');
-      }
-
-      showToast('success', '✨ Success! Sending invitations...');
-      setPrompt('');
-      setSelectedContacts(new Set());
-      setMeetingSummary(null);
-      await fetchInvites();
-    } catch (err) {
-      console.error('Failed to create Meetini:', err);
-      setError(err instanceof Error ? err.message : 'An error occurred');
-      showToast('error', 'Failed to create Meetini. Please try again.');
-    } finally {
-      setIsProcessing(false);
-    }
-  }, [prompt, selectedContacts, fetchInvites]);
-
-  const handleInviteAction = useCallback(async (id: string, action: 'accept' | 'decline' | 'cancel') => {
-    const confirmActions = {
-      accept: {
-        title: 'Accept Invitation',
-        message: 'Are you sure you want to accept this invitation? This will create a calendar event.',
-        type: 'success' as const
-      },
-      decline: {
-        title: 'Decline Invitation',
-        message: 'Are you sure you want to decline this invitation?',
-        type: 'danger' as const
-      },
-      cancel: {
-        title: 'Cancel Invitation',
-        message: 'Are you sure you want to cancel this invitation? This cannot be undone.',
-        type: 'warning' as const
-      }
-    };
-
-    const { title, message, type } = confirmActions[action];
-
-    setConfirmDialog({
-      isOpen: true,
-      title,
-      message,
-      type,
-      onClose: () => setConfirmDialog(prev => ({ ...prev, isOpen: false })),
-      onConfirm: async () => {
-        try {
-          const response = await fetch('/api/meetini', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id, action })
-          });
-
-          const data = await response.json();
-          if (!response.ok) throw new Error(data.error);
-
-          if (action === 'accept') {
-            const calendarResponse = await fetch('/api/calendar/invite', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ invitationId: id })
-            });
-
-            if (!calendarResponse.ok) {
-              const calendarError = await calendarResponse.json();
-              throw new Error(calendarError.error || 'Failed to create calendar invitation');
-            }
-          }
-
-          setMeetiniInvites(prev => {
-            if (action === 'cancel') {
-              return prev.filter(invite => invite.id !== id);
-            }
-            return prev.map(invite => 
-              invite.id === id 
-                ? { ...invite, status: action === 'accept' ? 'accepted' : 'declined' }
-                : invite
-            );
-          });
-
-          showToast('success', `Successfully ${action}ed the invitation`);
-          setConfirmDialog(prev => ({ ...prev, isOpen: false }));
-        } catch (error) {
-          console.error('Failed to update invitation:', error);
-          setError(error instanceof Error ? error.message : 'Failed to update invitation');
-          showToast('error', 'Failed to update invitation');
-        }
-      }
-    });
-  }, [showToast]);
-
+  // Meeting type detection based on prompt keywords
   const detectMeetingType = useCallback((prompt: string): { type: string; confidence: number } => {
     const promptLower = prompt.toLowerCase();
     
@@ -517,33 +415,103 @@ export default function Dashboard() {
     return { type: 'in-person', confidence: 0.6 };
   }, []);
 
-  const groupedEvents = useMemo(() => {
-    return events.reduce((groups: { [key: string]: CalendarEvent[] }, event) => {
-      const date = new Date(event.start.dateTime || event.start.date || Date.now());
-      const monthYear = date.toLocaleString('default', { month: 'long', year: 'numeric' });
-      if (!groups[monthYear]) {
-        groups[monthYear] = [];
+  const createMeetini = useCallback(async () => {
+    try {
+      setIsProcessing(true);
+      setError(null);
+
+      if (selectedContacts.size === 0) {
+        throw new Error('Please select at least one participant');
       }
-      groups[monthYear].push(event);
-      return groups;
-    }, {});
-  }, [events]);
 
-  const filteredInvites = useMemo(() => 
-    meetiniInvites.filter(invite => invite.type === activeTab),
-    [meetiniInvites, activeTab]
-  );
+      if (!prompt.trim()) {
+        throw new Error('Please provide a meeting description');
+      }
 
-  const getStatusColor = useCallback((status: MeetiniInvite['status']) => {
-    switch (status) {
-      case 'accepted':
-        return 'text-green-500';
-      case 'declined':
-        return 'text-red-500';
-      default:
-        return 'text-yellow-500';
+      // Get meeting type from prompt
+      const { type: detectedType } = detectMeetingType(prompt);
+
+      // Format participants for the API
+      const participants = Array.from(selectedContacts).map(email => {
+        const contact = meetingSummary?.contacts.find(c => c.email === email);
+        return {
+          email,
+          name: contact?.name || email.split('@')[0],
+          notifyByEmail: true
+        };
+      });
+
+      // Make the API request to our new create endpoint
+      const response = await fetch('/api/meetini/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          invite: {
+            type: prompt,
+            description: `Created via Meetini\n\nOriginal prompt: ${prompt}`,
+            participants,
+            suggestedTimes: meetingSummary?.suggestedTimes,
+            location: detectedType === 'virtual' ? 'Virtual' : undefined
+          }
+        }),
+      });
+
+      // Try to parse response as JSON
+      let data;
+      try {
+        data = await response.json();
+      } catch (parseError) {
+        console.error('Failed to parse response:', parseError);
+        throw new Error('Server returned an invalid response');
+      }
+
+      // Check for specific error cases
+      if (!response.ok) {
+        // Handle known error cases
+        if (response.status === 401) {
+          throw new Error('Please sign in to create meetings');
+        }
+        if (response.status === 403) {
+          throw new Error('You do not have permission to create meetings');
+        }
+        if (response.status === 429) {
+          throw new Error('Too many requests. Please try again later');
+        }
+        
+        // Use server error message if available, otherwise fallback
+        throw new Error(data?.error || `Server error: ${response.status}`);
+      }
+
+      // Show success message with registration stats
+      const successMessage = data.unregisteredParticipants > 0
+        ? `✨ Success! Sent ${data.registeredParticipants} invites and ${data.unregisteredParticipants} signup prompts`
+        : '✨ Success! Sending invitations...';
+
+      showToast('success', successMessage);
+      
+      // Clear form
+      setPrompt('');
+      setSelectedContacts(new Set());
+      setMeetingSummary(null);
+      await fetchInvites();
+
+    } catch (err) {
+      console.error('Failed to create Meetini:', err);
+      
+      // Extract most useful error message
+      let errorMessage = 'Failed to create meeting';
+      if (err instanceof Error) {
+        errorMessage = err.message;
+      } else if (typeof err === 'string') {
+        errorMessage = err;
+      }
+      
+      setError(errorMessage);
+      showToast('error', `${errorMessage}. Please try again.`);
+    } finally {
+      setIsProcessing(false);
     }
-  }, []);
+  }, [prompt, selectedContacts, meetingSummary, fetchInvites, showToast, detectMeetingType]);
 
   const toggleEvent = useCallback((eventId: string) => {
     setExpandedEvents(prev => {
@@ -635,6 +603,128 @@ export default function Dashboard() {
     );
   }, [meetingSummary?.contacts, selectedContacts, toggleContactSelection]);
 
+  const handleInviteAction = useCallback(async (id: string, action: 'accept' | 'decline' | 'cancel') => {
+    const confirmActions = {
+      accept: {
+        title: 'Accept Invitation',
+        message: 'Are you sure you want to accept this invitation? This will create a calendar event.',
+        type: 'success' as const
+      },
+      decline: {
+        title: 'Decline Invitation',
+        message: 'Are you sure you want to decline this invitation?',
+        type: 'danger' as const
+      },
+      cancel: {
+        title: 'Cancel Invitation',
+        message: 'Are you sure you want to cancel this invitation? This cannot be undone.',
+        type: 'warning' as const
+      }
+    };
+
+    const { title, message, type } = confirmActions[action];
+
+    setConfirmDialog({
+      isOpen: true,
+      title,
+      message,
+      type,
+      onClose: () => setConfirmDialog(prev => ({ ...prev, isOpen: false })),
+      onConfirm: async () => {
+        try {
+          // Update invitation status
+          const response = await fetch('/api/meetini', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id, action })
+          });
+
+          let data;
+          try {
+            data = await response.json();
+          } catch (parseError) {
+            console.error('Failed to parse response:', parseError);
+            throw new Error('Server returned an invalid response');
+          }
+
+          if (!response.ok) {
+            throw new Error(data?.error || `Failed to ${action} invitation`);
+          }
+
+          // If accepting, create calendar event
+          if (action === 'accept') {
+            const calendarResponse = await fetch('/api/calendar/invite', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ invitationId: id })
+            });
+
+            let calendarData;
+            try {
+              calendarData = await calendarResponse.json();
+            } catch (parseError) {
+              console.error('Failed to parse calendar response:', parseError);
+              throw new Error('Failed to create calendar event');
+            }
+
+            if (!calendarResponse.ok) {
+              throw new Error(calendarData?.error || 'Failed to create calendar event');
+            }
+          }
+
+          // Update local state
+          setMeetiniInvites(prev => {
+            if (action === 'cancel') {
+              return prev.filter(invite => invite.id !== id);
+            }
+            return prev.map(invite => 
+              invite.id === id 
+                ? { ...invite, status: action === 'accept' ? 'accepted' : 'declined' }
+                : invite
+            );
+          });
+
+          showToast('success', `Successfully ${action}ed the invitation`);
+          setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+
+        } catch (error) {
+          console.error('Failed to update invitation:', error);
+          const errorMessage = error instanceof Error ? error.message : 'Failed to update invitation';
+          setError(errorMessage);
+          showToast('error', errorMessage);
+        }
+      }
+    });
+  }, [showToast]);
+
+  const groupedEvents = useMemo(() => {
+    return events.reduce((groups: { [key: string]: CalendarEvent[] }, event) => {
+      const date = new Date(event.start.dateTime || event.start.date || Date.now());
+      const monthYear = date.toLocaleString('default', { month: 'long', year: 'numeric' });
+      if (!groups[monthYear]) {
+        groups[monthYear] = [];
+      }
+      groups[monthYear].push(event);
+      return groups;
+    }, {});
+  }, [events]);
+
+  const filteredInvites = useMemo(() => 
+    meetiniInvites.filter(invite => invite.type === activeTab),
+    [meetiniInvites, activeTab]
+  );
+
+  const getStatusColor = useCallback((status: MeetiniInvite['status']) => {
+    switch (status) {
+      case 'accepted':
+        return 'text-green-500';
+      case 'declined':
+        return 'text-red-500';
+      default:
+        return 'text-yellow-500';
+    }
+  }, []);
+
   if (status === 'loading') {
     return (
       <div className="min-h-screen bg-black text-white flex items-center justify-center">
@@ -712,7 +802,7 @@ export default function Dashboard() {
                   {/* Create Button */}
                   <div className="pt-4">
                     <button
-                      onClick={handleCreateMeetini}
+                      onClick={createMeetini}
                       disabled={isProcessing || selectedContacts.size === 0}
                       className={`w-full px-6 py-3 bg-teal-500 text-white rounded-lg transition-colors ${
                         isProcessing || selectedContacts.size === 0 

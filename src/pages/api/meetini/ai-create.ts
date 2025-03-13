@@ -10,6 +10,10 @@ import { getToken } from 'next-auth/jwt';
 import { Credentials } from 'google-auth-library';
 import { Prisma } from '@prisma/client';
 
+if (!process.env.RESEND_API_KEY) {
+  console.error('RESEND_API_KEY is not set');
+}
+
 const resend = new Resend(process.env.RESEND_API_KEY);
 const calendar = google.calendar('v3');
 
@@ -40,25 +44,49 @@ export default async function handler(
     }
 
     // Step 1: Parse the natural language request using AI
-    const parsedRequest = await parseMeetingRequest(req, prompt);
-    console.log('Parsed request:', parsedRequest);
+    let parsedRequest;
+    try {
+      parsedRequest = await parseMeetingRequest(req, prompt);
+      console.log('Parsed request:', parsedRequest);
+    } catch (error) {
+      console.error('Failed to parse meeting request:', error);
+      return res.status(400).json({ 
+        error: 'Could not understand meeting request. Please try rephrasing.',
+        details: error instanceof Error ? error.message : undefined
+      });
+    }
 
     // Step 2: Find optimal meeting times using calendar availability
-    const proposedTimes = await findOptimalTimes(
-      req,
-      participants,
-      parsedRequest.preferences
-    );
+    let proposedTimes;
+    try {
+      proposedTimes = await findOptimalTimes(
+        req,
+        participants,
+        parsedRequest.preferences
+      );
 
-    if (!proposedTimes || proposedTimes.length === 0) {
+      if (!proposedTimes || proposedTimes.length === 0) {
+        return res.status(400).json({ 
+          error: 'Could not find any suitable meeting times. Please try different preferences or participants.',
+          code: 'NO_AVAILABILITY'
+        });
+      }
+    } catch (error) {
+      console.error('Failed to find optimal times:', error);
       return res.status(400).json({ 
-        error: 'Could not find any suitable meeting times. Please try different preferences or participants.' 
+        error: 'Failed to check calendar availability. Please try again.',
+        details: error instanceof Error ? error.message : undefined
       });
     }
 
     // Step 3: Create Google Calendar event
     const token = await getToken({ req });
-    if (!token?.credentials) throw new Error('No token found');
+    if (!token?.credentials) {
+      return res.status(401).json({ 
+        error: 'No calendar access. Please reconnect your Google Calendar.',
+        code: 'NO_CALENDAR_ACCESS'
+      });
+    }
 
     const auth = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID,
@@ -87,78 +115,109 @@ export default async function handler(
         timeZone: 'America/Los_Angeles',
       },
       attendees: participants.map((email: string) => ({ email })),
-      conferenceData: {
+      conferenceData: parsedRequest.preferences.locationType === 'virtual' ? {
         createRequest: {
           requestId: `meetini-${Date.now()}`,
           conferenceSolutionKey: { type: 'hangoutsMeet' },
         },
-      },
+      } : undefined,
+      guestsCanModify: true,
+      guestsCanInviteOthers: false,
+      guestsCanSeeOtherGuests: true,
+      reminders: {
+        useDefault: true
+      }
     };
 
-    const calendarEvent = await calendar.events.insert({
-      auth,
-      calendarId: 'primary',
-      requestBody: event,
-      conferenceDataVersion: 1,
-    });
+    let calendarEvent;
+    try {
+      calendarEvent = await calendar.events.insert({
+        auth,
+        calendarId: 'primary',
+        requestBody: event,
+        conferenceDataVersion: parsedRequest.preferences.locationType === 'virtual' ? 1 : 0,
+        sendUpdates: 'all'  // Send Google Calendar's native notifications
+      });
+    } catch (error) {
+      console.error('Failed to create calendar event:', error);
+      return res.status(500).json({ 
+        error: 'Failed to create calendar event. Please try again.',
+        details: error instanceof Error ? error.message : undefined
+      });
+    }
 
     // Step 4: Create the invitation in the database
-    const inviteData: Prisma.InvitationCreateInput = {
-      title: eventTitle,
-      type: 'meetini',
-      status: 'confirmed',
-      creator: {
-        connect: {
-          email: session.user.email
-        }
-      },
-      location: parsedRequest.location || '',
-      calendarEventId: calendarEvent.data.id || '',
-      proposedTimes: [eventStartTime],
-      participants: {
-        create: participants.map((email: string) => ({
-          email: email.toLowerCase(),
-          status: 'pending',
-          notifyByEmail: true,
-          notifyBySms: false
-        }))
-      },
-      preferences: {
-        create: {
-          timePreference: parsedRequest.preferences.timePreference || null,
-          durationType: parsedRequest.preferences.durationType || null,
-          locationType: parsedRequest.preferences.locationType || null
-        }
-      },
-      recipients: {
-        connect: participants.map(email => ({ email }))
-      }
-    };
+    let newInvite;
+    try {
+      // Find or create the recipient users first
+      await Promise.all(participants.map(async (email) => {
+        return prisma.user.upsert({
+          where: { email },
+          create: { 
+            email,
+            notifyByEmail: true,
+            notifyBySms: false
+          },
+          update: {}
+        });
+      }));
 
-    // Find or create the recipient users
-    await Promise.all(participants.map(async (email) => {
-      return prisma.user.upsert({
-        where: { email },
-        create: { 
-          email,
-          notifyByEmail: true,
-          notifyBySms: false
+      const inviteData: Prisma.InvitationCreateInput = {
+        title: eventTitle,
+        type: parsedRequest.preferences.locationType || 'virtual',
+        status: 'confirmed',
+        creator: {
+          connect: {
+            email: session.user.email
+          }
         },
-        update: {}
+        location: parsedRequest.location || '',
+        calendarEventId: calendarEvent.data.id || '',
+        proposedTimes: [eventStartTime],
+        participants: {
+          create: participants.map((email: string) => ({
+            email: email.toLowerCase(),
+            status: 'pending',
+            notifyByEmail: true,
+            notifyBySms: false
+          }))
+        },
+        preferences: {
+          create: {
+            timePreference: parsedRequest.preferences.timePreference || null,
+            durationType: parsedRequest.preferences.durationType || null,
+            locationType: parsedRequest.preferences.locationType || null
+          }
+        }
+      };
+
+      newInvite = await prisma.invitation.create({
+        data: inviteData,
+        include: {
+          participants: true,
+          preferences: true
+        }
       });
-    }));
-
-    const newInvite = await prisma.invitation.create({
-      data: inviteData,
-      include: {
-        participants: true,
-        preferences: true,
-        creator: true,
-        recipients: true
+    } catch (error) {
+      console.error('Failed to save invitation:', error);
+      // Try to clean up the calendar event
+      try {
+        await calendar.events.delete({
+          auth,
+          calendarId: 'primary',
+          eventId: calendarEvent.data.id!,
+          sendUpdates: 'all'
+        });
+      } catch (cleanupError) {
+        console.error('Failed to clean up calendar event:', cleanupError);
       }
-    });
+      return res.status(500).json({ 
+        error: 'Failed to save invitation. Please try again.',
+        details: error instanceof Error ? error.message : undefined
+      });
+    }
 
-    // Step 5: Send emails via Resend
+    // Step 5: Send branded confirmation email via Resend
     try {
       const emailPromises = participants.map(async (email: string) => {
         const emailContent = generateInviteEmail({
@@ -176,7 +235,7 @@ export default async function handler(
         });
 
         return resend.emails.send({
-          from: 'Meetini <onboarding@resend.dev>',
+          from: 'Meetini <meetings@meetini.app>',
           to: email,
           subject: `${session.user.name || 'Someone'} invited you to ${eventTitle}`,
           html: emailContent
@@ -184,18 +243,19 @@ export default async function handler(
       });
 
       await Promise.all(emailPromises);
-      console.log('All emails sent successfully');
+      console.log('All confirmation emails sent successfully');
     } catch (emailError) {
-      console.error('Failed to send invite emails:', emailError);
+      console.error('Failed to send confirmation emails:', emailError);
+      // Don't fail the request, just warn about email issues
       return res.status(200).json({ 
         ...newInvite,
-        warning: 'Calendar event created but failed to send some emails'
+        warning: 'Meeting created but some confirmation emails may not have been sent'
       });
     }
 
     return res.status(200).json(newInvite);
   } catch (error) {
-    console.error('Failed to process AI request:', error);
+    console.error('Failed to process meeting request:', error);
     return res.status(500).json({ 
       error: 'Failed to process request',
       details: error instanceof Error ? error.message : 'Unknown error'

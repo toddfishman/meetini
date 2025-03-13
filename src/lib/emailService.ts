@@ -1,130 +1,172 @@
-import { google } from 'googleapis';
-import { formatDate, titleCase } from './utils';
-
-interface EmailOptions {
-  to: string[];
-  subject: string;
-  body: string;
-  from?: string;
-}
+import { Resend } from 'resend';
 
 interface MeetingDetails {
   title: string;
-  dateTime: string;
-  duration: number;
+  type: string;
+  dateTime: Date;
+  duration: string;
+  location: string;
   description?: string;
   meetLink?: string;
-  eventLink: string;  
-  organizer: string;
+  calendarLink: string;
   originalPrompt?: string;
+  creator: {
+    name: string;
+    email: string;
+  };
+  participants: string[];
+  additionalHtml?: string;  // For signup prompts and other custom content
 }
 
 export class EmailService {
-  private static async getGmailClient(token: string) {
-    const oauth2Client = new google.auth.OAuth2();
-    oauth2Client.setCredentials({ access_token: token });
-    return google.gmail({ version: 'v1', auth: oauth2Client });
+  private resend: Resend;
+  private fromEmail: string;
+
+  constructor() {
+    if (!process.env.RESEND_API_KEY) {
+      throw new Error('RESEND_API_KEY is not configured');
+    }
+    if (!process.env.RESEND_FROM_EMAIL) {
+      throw new Error('RESEND_FROM_EMAIL is not configured');
+    }
+    this.resend = new Resend(process.env.RESEND_API_KEY);
+    this.fromEmail = process.env.RESEND_FROM_EMAIL;
   }
 
-  private static createEmailContent(options: EmailOptions): string {
-    const { to, subject, body, from } = options;
-    const emailLines = [
-      'MIME-Version: 1.0',
-      'Content-Type: text/html; charset=utf-8',
-      `To: ${to.join(', ')}`,
-      `From: ${from || 'Meetini <noreply@meetini.app>'}`,
-      `Subject: ${subject}`,
-      '',
-      body
-    ];
-
-    return Buffer.from(emailLines.join('\r\n'))
-      .toString('base64')
-      .replace(/\+/g, '-')
-      .replace(/\//g, '_')
-      .replace(/=+$/, '');
+  private formatParticipantNames(participants: string[]): string {
+    return participants.map(email => 
+      email.split('@')[0].split('.').map(part => 
+        part.charAt(0).toUpperCase() + part.slice(1)
+      ).join(' ')
+    ).join(', ');
   }
 
-  static async sendMeetingConfirmation(
-    participants: string[],
-    details: MeetingDetails,
-    token: string
-  ): Promise<void> {
-    const gmail = await this.getGmailClient(token);
-    const organizerName = titleCase(details.organizer.split('@')[0]);
+  async sendMeetingConfirmation(details: MeetingDetails): Promise<void> {
+    const participantNames = this.formatParticipantNames(details.participants);
+    const creatorName = details.creator.name || details.creator.email.split('@')[0];
 
-    const emailBody = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <h2 style="color: #2DD4BF;">Meeting Created! 🎉</h2>
+    const emailContent = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+        <h2 style="color: #2DD4BF;">${details.type} with ${participantNames}</h2>
         
-        <div style="background-color: #1F2937; color: white; padding: 20px; border-radius: 8px; margin: 20px 0;">
-          <h3 style="margin: 0; color: white;">${details.title}</h3>
-          <p style="font-size: 18px; margin: 10px 0 0 0;">
-            📅 ${formatDate(new Date(details.dateTime))}
-          </p>
-          <p style="color: #9CA3AF; margin: 10px 0 0 0;">
-            Duration: ${details.duration} minutes
-          </p>
-        </div>
-
-        ${details.originalPrompt ? `
-          <div style="margin: 20px 0; color: #4B5563;">
-            <h3 style="color: #111827;">Original Request</h3>
-            <p style="font-style: italic;">"${details.originalPrompt}"</p>
+        <div style="margin: 20px 0; padding: 20px; background: #f8f8f8; border-radius: 8px;">
+          ${details.originalPrompt ? `
+            <p style="color: #666; font-style: italic;">"${details.originalPrompt}"</p>
+          ` : ''}
+          
+          <div style="margin-top: 20px;">
+            <p><strong>When:</strong> ${details.dateTime.toLocaleString('en-US', { 
+              weekday: 'long',
+              month: 'long',
+              day: 'numeric',
+              year: 'numeric',
+              hour: 'numeric',
+              minute: '2-digit',
+              timeZoneName: 'short'
+            })}</p>
+            <p><strong>Duration:</strong> ${details.duration}</p>
+            <p><strong>Where:</strong> ${details.location}</p>
+            <p><strong>Created by:</strong> ${creatorName}</p>
+            <p><strong>Participants:</strong> ${participantNames}</p>
           </div>
-        ` : ''}
-
-        <div style="margin: 20px 0;">
-          <p style="margin: 5px 0;">
-            <strong>Created by:</strong> ${organizerName}
-          </p>
-          <p style="margin: 5px 0;">
-            <strong>Participants:</strong> ${participants.map(p => titleCase(p.split('@')[0])).join(', ')}
-          </p>
         </div>
 
         <div style="margin: 20px 0;">
-          <a href="${details.eventLink}" 
-             style="background-color: #2DD4BF; color: white; padding: 10px 20px; 
-                    text-decoration: none; border-radius: 4px; display: inline-block;">
+          <a href="${details.calendarLink}" 
+             style="display: inline-block; background: #2DD4BF; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; margin-right: 10px;">
             View in Calendar
           </a>
-          ${details.meetLink ? `
-            <p style="margin-top: 10px;">
-              <a href="${details.meetLink}" style="color: #2DD4BF;">
-                Join Google Meet
-              </a>
-            </p>
+          ${details.location === 'Virtual' && details.meetLink ? `
+            <a href="${details.meetLink}" 
+               style="display: inline-block; background: #4285f4; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px;">
+              Join Google Meet
+            </a>
           ` : ''}
         </div>
 
-        <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #E5E7EB; 
-                    color: #6B7280; font-size: 14px;">
-          <p>
-            This meeting was created via Meetini. Check your calendar for the official invite!
-          </p>
-        </div>
+        <p style="color: #666; font-size: 14px; border-top: 1px solid #eee; padding-top: 20px; margin-top: 20px;">
+          You'll receive a separate calendar invitation that you can use to modify or decline if needed.
+          ${details.location === 'Virtual' ? 'The calendar invite will include the official Google Meet link for joining the meeting.' : ''}
+        </p>
+
+        ${details.additionalHtml || ''}
       </div>
     `;
 
-    const emailOptions: EmailOptions = {
-      to: participants,
-      subject: `Meetini Created: ${details.title}`,
-      body: emailBody
-    };
-
-    const email = this.createEmailContent(emailOptions);
-
     try {
-      await gmail.users.messages.send({
-        userId: 'me',
-        requestBody: {
-          raw: email
-        }
+      // Send to all participants including the creator
+      const emailPromises = details.participants.map(async (email) => {
+        await this.resend.emails.send({
+          from: `Meetini <${this.fromEmail}>`,
+          to: email,
+          subject: `${details.type} with ${participantNames}`,
+          html: emailContent
+        });
       });
+
+      await Promise.all(emailPromises);
     } catch (error) {
       console.error('Failed to send confirmation email:', error);
       throw new Error('Failed to send meeting confirmation email');
+    }
+  }
+
+  async sendMeetingCreatedConfirmation(details: MeetingDetails): Promise<void> {
+    const participantNames = this.formatParticipantNames(details.participants.filter(p => p !== details.creator.email));
+
+    const emailContent = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+        <h2 style="color: #2DD4BF;">Meeting Created Successfully! 🎉</h2>
+        
+        <div style="margin: 20px 0; padding: 20px; background: #f8f8f8; border-radius: 8px;">
+          <h3 style="margin: 0;">${details.type} with ${participantNames}</h3>
+          
+          ${details.originalPrompt ? `
+            <p style="color: #666; font-style: italic; margin-top: 15px;">"${details.originalPrompt}"</p>
+          ` : ''}
+          
+          <div style="margin-top: 20px;">
+            <p><strong>When:</strong> ${details.dateTime.toLocaleString('en-US', { 
+              weekday: 'long',
+              month: 'long',
+              day: 'numeric',
+              year: 'numeric',
+              hour: 'numeric',
+              minute: '2-digit',
+              timeZoneName: 'short'
+            })}</p>
+            <p><strong>Duration:</strong> ${details.duration}</p>
+            <p><strong>Where:</strong> ${details.location}</p>
+            <p><strong>Participants:</strong> ${participantNames}</p>
+          </div>
+        </div>
+
+        <div style="margin: 20px 0;">
+          <a href="${details.calendarLink}" 
+             style="display: inline-block; background: #2DD4BF; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; margin-right: 10px;">
+            Manage Event
+          </a>
+        </div>
+
+        <p style="color: #666; font-size: 14px; border-top: 1px solid #eee; padding-top: 20px; margin-top: 20px;">
+          Your participants will receive a calendar invitation and a branded confirmation email with all the details.
+        </p>
+
+        ${details.additionalHtml || ''}
+      </div>
+    `;
+
+    try {
+      await this.resend.emails.send({
+        from: `Meetini <${this.fromEmail}>`,
+        to: details.creator.email,
+        subject: `Meeting Created: ${details.type} with ${participantNames}`,
+        html: emailContent,
+        replyTo: details.creator.email
+      });
+    } catch (error) {
+      console.error('Failed to send creator confirmation:', error);
+      throw new Error('Failed to send meeting creation confirmation');
     }
   }
 }

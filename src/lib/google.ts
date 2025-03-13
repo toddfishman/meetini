@@ -56,10 +56,46 @@ function getExactNameMatchScore(contactName: string, searchName: string): number
   const contactParts = cn.split(' ').filter(p => p.length > 1);
   const searchParts = sn.split(' ').filter(p => p.length > 1);
   
-  const matchingParts = searchParts.filter(p => contactParts.includes(p));
+  const matchingParts = searchParts.filter(p => contactParts.some(cp => cp.includes(p) || p.includes(cp)));
   if (matchingParts.length === searchParts.length) return 0.85;
   
+  // Partial name matches (e.g., "tod" matches "todd")
+  if (searchParts.some(p => 
+    contactParts.some(cp => 
+      cp.startsWith(p) || 
+      p.startsWith(cp) ||
+      // Levenshtein distance for similar names
+      (p.length > 3 && cp.length > 3 && levenshteinDistance(p, cp) <= 2)
+    )
+  )) {
+    return 0.7;
+  }
+  
   return 0;
+}
+
+// Helper function to calculate Levenshtein distance for similar names
+function levenshteinDistance(a: string, b: string): number {
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+
+  const matrix = Array(b.length + 1).fill(null).map(() => Array(a.length + 1).fill(null));
+
+  for (let i = 0; i <= a.length; i++) matrix[0][i] = i;
+  for (let j = 0; j <= b.length; j++) matrix[j][0] = j;
+
+  for (let j = 1; j <= b.length; j++) {
+    for (let i = 1; i <= a.length; i++) {
+      const substitutionCost = a[i - 1] === b[j - 1] ? 0 : 1;
+      matrix[j][i] = Math.min(
+        matrix[j][i - 1] + 1, // deletion
+        matrix[j - 1][i] + 1, // insertion
+        matrix[j - 1][i - 1] + substitutionCost // substitution
+      );
+    }
+  }
+
+  return matrix[b.length][a.length];
 }
 
 export async function searchEmailContacts(req: NextApiRequest, names: string[]): Promise<ContactSearchResults> {
@@ -143,7 +179,7 @@ export async function searchEmailContacts(req: NextApiRequest, names: string[]):
             if (contact && contact.email !== token.email) {
               for (const searchName of names) {
                 const score = getExactNameMatchScore(contact.name, searchName);
-                if (score >= 0.85) { // Only accept high confidence matches
+                if (score >= 0.7) { // More lenient threshold
                   const contactsForName = contactsByName.get(searchName)!;
                   const existing = contactsForName.get(contact.email.toLowerCase());
                   if (existing) {
@@ -179,7 +215,7 @@ export async function searchEmailContacts(req: NextApiRequest, names: string[]):
               if (contact && contact.email !== token.email) {
                 for (const searchName of names) {
                   const score = getExactNameMatchScore(contact.name, searchName);
-                  if (score >= 0.85) {
+                  if (score >= 0.7) { // More lenient threshold
                     const contactsForName = contactsByName.get(searchName)!;
                     const existing = contactsForName.get(contact.email.toLowerCase());
                     if (existing) {

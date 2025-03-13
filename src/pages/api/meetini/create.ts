@@ -2,18 +2,16 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '../auth/[...nextauth]';
 import { prisma } from '@/lib/prisma';
-import { Resend } from 'resend';
+import { CalendarService } from '../../../lib/calendarService';
+import { detectMeetingPurpose } from '@/lib/nlp';
+import { EmailService } from '@/lib/emailService';
 
-if (!process.env.RESEND_API_KEY) {
-  console.error('RESEND_API_KEY is not set in environment variables');
-}
-
-const resend = new Resend(process.env.RESEND_API_KEY);
-
-interface MeetiniUser {
-  isMeetiniUser: boolean;
-  preferences?: any;
-  name: string | null;
+interface MeetiniParticipant {
+  email: string;
+  name?: string;
+  phoneNumber?: string;
+  notifyByEmail?: boolean;
+  notifyBySms?: boolean;
 }
 
 interface MeetiniInvite {
@@ -21,7 +19,7 @@ interface MeetiniInvite {
   description?: string;
   location?: string;
   type: string;
-  participants: Array<{ email: string; name?: string }>;
+  participants: MeetiniParticipant[];
   suggestedTimes?: string[];
   createdBy: string;
 }
@@ -33,162 +31,161 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const session = await getServerSession(req, res, authOptions);
-    if (!session) {
+    if (!session?.user?.email) {
       return res.status(401).json({ error: 'Not authenticated' });
     }
 
-    const { invite, userStatuses } = req.body;
+    const { invite } = req.body as { invite: MeetiniInvite };
     
-    if (!invite || !userStatuses) {
-      return res.status(400).json({ error: 'Missing invite or userStatuses data' });
-    }
-
-    if (!invite.type || !invite.participants || invite.participants.length === 0) {
+    if (!invite?.type || !invite.participants || invite.participants.length === 0) {
       return res.status(400).json({ error: 'Invalid invite data' });
     }
 
-    console.log('Creating invite with data:', { invite, userStatuses });
+    console.log('Creating invite with data:', invite);
 
-    // Create the Meetini invite in the database
-    const newInvite = await prisma.meetiniInvite.create({
+    // Create calendar event
+    const calendarService = new CalendarService(session);
+
+    // Format title based on meeting type and participants
+    const meetingPurpose = detectMeetingPurpose(invite.type);
+    const meetingType = meetingPurpose?.type || 'Meeting';
+    const participantNames = invite.participants
+      .map((p: MeetiniParticipant) => p.name || p.email.split('@')[0])
+      .join('/');
+    
+    const eventTitle = `${meetingType} with ${participantNames}`;
+    
+    // Default to 30 minutes from now if no time specified
+    const defaultStartTime = new Date();
+    defaultStartTime.setMinutes(defaultStartTime.getMinutes() + 30);
+    const startTime = invite.suggestedTimes?.[0] || defaultStartTime.toISOString();
+    
+    // Create calendar event with Meet link for virtual meetings
+    const event = await calendarService.createEvent({
+      summary: eventTitle,
+      description: invite.description || `Scheduled via Meetini\n\nOriginal prompt: ${invite.type}`,
+      attendees: invite.participants.map((p: MeetiniParticipant) => ({ email: p.email })),
+      startTime,
+      duration: 30, // Default 30-minute duration
+      virtual: true, // Always include Meet link for now
+    });
+
+    if (!event.id || !event.start?.dateTime) {
+      throw new Error('Failed to create calendar event with valid start time');
+    }
+
+    // Save invite to database
+    const dbInvite = await prisma.invitation.create({
       data: {
-        title: invite.title || 'New Meeting',
+        title: eventTitle,
         type: invite.type,
         status: 'pending',
         createdBy: session.user.email,
-        location: invite.location,
-        description: invite.description,
-        proposedTimes: {
-          create: (invite.suggestedTimes || []).map(time => ({
-            dateTime: new Date(time),
-            status: 'pending'
-          }))
-        },
+        calendarEventId: event.id,
+        proposedTimes: invite.suggestedTimes ? invite.suggestedTimes.map(time => new Date(time)) : [],
         participants: {
-          create: invite.participants.map(participant => ({
-            email: participant.email.toLowerCase(),
+          create: invite.participants.map((p: MeetiniParticipant) => ({
+            email: p.email,
+            name: p.name,
             status: 'pending',
-            isMeetiniUser: userStatuses[participant.email.toLowerCase()]?.isMeetiniUser || false
+            notifyByEmail: p.notifyByEmail ?? true,
+            notifyBySms: p.notifyBySms ?? false,
+            phoneNumber: p.phoneNumber
           }))
         }
       },
       include: {
-        proposedTimes: true,
         participants: true
       }
     });
 
-    console.log('Created invite:', newInvite);
-
-    if (!process.env.RESEND_API_KEY) {
-      console.error('RESEND_API_KEY is not set. Skipping email sending.');
-      return res.status(200).json({ 
-        ...newInvite,
-        warning: 'Invite created but emails not sent - missing API key'
-      });
-    }
-
-    // Send emails directly using Resend
-    try {
-      const emailPromises = invite.participants.map(async (participant) => {
-        try {
-          const emailContent = generateInviteEmail(
-            newInvite.id,
-            invite,
-            participant.name || participant.email,
-            session.user
-          );
-
-          console.log('Sending invite email to:', participant.email);
-
-          const result = await resend.emails.send({
-            from: 'Meetini <invites@meetini.ai>',
-            to: participant.email,
-            subject: `${session.user.name || 'Someone'} invited you to ${invite.title || 'a meeting'}`,
-            html: emailContent
-          }).catch(error => {
-            console.error('Resend API error:', error);
-            throw error;
-          });
-
-          console.log('Email sent successfully to:', participant.email, result);
-          return result;
-        } catch (error) {
-          console.error('Failed to send email to:', participant.email, error);
-          throw error;
+    // Check which participants are registered Meetini users
+    const registeredUsers = await prisma.user.findMany({
+      where: {
+        email: {
+          in: invite.participants.map(p => p.email)
         }
-      });
+      },
+      select: { email: true }
+    });
 
-      await Promise.all(emailPromises);
-      console.log('All emails sent successfully');
-    } catch (emailError) {
-      console.error('Failed to send invite emails:', emailError);
-      // Don't fail the whole request if email sending fails
-      return res.status(200).json({ 
-        ...newInvite,
-        warning: 'Invite created but failed to send emails: ' + (emailError instanceof Error ? emailError.message : 'Unknown error')
-      });
+    const registeredEmails = new Set(registeredUsers.map(u => u.email));
+
+    // Prepare meeting details for email
+    const meetingDetails = {
+      title: eventTitle,
+      type: meetingType,
+      dateTime: new Date(event.start.dateTime),
+      duration: '30 minutes',
+      location: invite.location || 'Virtual',
+      description: invite.description,
+      meetLink: event.conferenceData?.entryPoints?.[0]?.uri || undefined,
+      calendarLink: event.htmlLink || '#',
+      originalPrompt: invite.type,
+      creator: {
+        name: session.user.name || session.user.email.split('@')[0],
+        email: session.user.email
+      },
+      participants: invite.participants.map(p => p.email)
+    };
+
+    const emailService = new EmailService();
+
+    // Send creator confirmation with management link
+    await emailService.sendMeetingCreatedConfirmation(meetingDetails);
+
+    // Send participant notifications with calendar and Meet links
+    for (const participant of invite.participants) {
+      if (participant.email === session.user.email) continue;
+
+      const isRegistered = registeredEmails.has(participant.email);
+      const signupLink = `https://meetini.ai/signup?email=${encodeURIComponent(participant.email)}&invite=${dbInvite.id}`;
+
+      // Add registration prompt for unregistered users
+      if (!isRegistered) {
+        const customHtml = `
+          <div style="margin-top: 20px; padding: 20px; background: #f0f9ff; border-radius: 8px;">
+            <h3 style="color: #0369a1; margin: 0 0 10px 0;">New to Meetini?</h3>
+            <p style="margin: 0 0 15px 0;">
+              Get more out of your meetings by joining Meetini:
+              • Create AI-powered meetings
+              • Manage your availability
+              • Sync with your calendar
+              • Get smart meeting suggestions
+            </p>
+            <a href="${signupLink}" 
+               style="background: #0ea5e9; color: white; padding: 10px 20px; 
+                      text-decoration: none; border-radius: 4px; display: inline-block;">
+              Sign up for Meetini
+            </a>
+          </div>
+        `;
+
+        // Add the signup prompt to the email
+        await emailService.sendMeetingConfirmation({
+          ...meetingDetails,
+          additionalHtml: customHtml
+        });
+      } else {
+        await emailService.sendMeetingConfirmation(meetingDetails);
+      }
     }
 
-    return res.status(200).json(newInvite);
+    return res.status(200).json({ 
+      success: true, 
+      inviteId: dbInvite.id,
+      eventId: event.id,
+      eventLink: event.htmlLink || '#',
+      meetLink: event.conferenceData?.entryPoints?.[0]?.uri || undefined,
+      registeredParticipants: registeredEmails.size,
+      unregisteredParticipants: invite.participants.length - registeredEmails.size
+    });
+
   } catch (error) {
-    console.error('Error creating Meetini invite:', error);
+    console.error('Error creating Meetini:', error);
     return res.status(500).json({ 
-      error: 'Failed to create Meetini invite',
+      error: 'Failed to create Meetini',
       details: error instanceof Error ? error.message : 'Unknown error'
     });
   }
-}
-
-function generateInviteEmail(
-  inviteId: string,
-  invite: MeetiniInvite,
-  recipientName: string,
-  creator: { name?: string; email: string }
-): string {
-  const emailContent = `
-    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-      <h2>${creator.name || creator.email} invited you to ${invite.title}</h2>
-
-      <div style="background-color: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0;">
-        <h3 style="margin-top: 0;">${invite.title}</h3>
-        <p><strong>Type:</strong> ${invite.type}</p>
-        ${invite.location ? `<p><strong>Location:</strong> ${invite.location}</p>` : ''}
-        ${invite.description ? `<p><strong>Description:</strong> ${invite.description}</p>` : ''}
-        <p><strong>Participants:</strong></p>
-        <ul>
-          ${invite.participants.map(p => `<li>${p.name || p.email}</li>`).join('')}
-        </ul>
-        ${invite.suggestedTimes?.length ? `
-          <p><strong>Suggested Times:</strong></p>
-          <ul>
-            ${invite.suggestedTimes.map(time => `
-              <li>${new Date(time).toLocaleString()}</li>
-            `).join('')}
-          </ul>
-        ` : ''}
-      </div>
-
-      <div style="margin: 20px 0;">
-        <a href="${process.env.NEXTAUTH_URL}/invite/${inviteId}" 
-           style="background-color: #10B981; color: white; padding: 12px 24px; 
-                  text-decoration: none; border-radius: 6px; display: inline-block;">
-          View and Respond
-        </a>
-      </div>
-
-      <p style="color: #666; font-size: 14px;">
-        This invitation was sent via Meetini - Making meeting scheduling effortless.
-      </p>
-    </div>
-  `;
-
-  console.log('Generated email content:', {
-    inviteId,
-    recipientName,
-    creator,
-    content: emailContent
-  });
-
-  return emailContent;
 }
