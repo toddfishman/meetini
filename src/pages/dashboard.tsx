@@ -347,31 +347,28 @@ export default function Dashboard() {
     }
   }, []);
 
+  const fetchEvents = useCallback(async () => {
+    try {
+      const response = await fetch('/api/calendar');
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error);
+      setEvents(data);
+    } catch (error) {
+      console.error('Failed to fetch calendar events:', error);
+    } finally {
+      setLoading(false);
+    }
+  }, [setEvents, setLoading]);
+
   useEffect(() => {
     if (status === 'unauthenticated') {
-      router.push('/');
-    }
-  }, [status, router]);
-
-  useEffect(() => {
-    async function fetchEvents() {
-      try {
-        const response = await fetch('/api/calendar');
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error);
-        setEvents(data);
-      } catch (error) {
-        console.error('Failed to fetch calendar events:', error);
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    if (session) {
+      router.replace('/');
+    } else if (status === 'authenticated' && !session?.error) {
+      // Only fetch data if we have a valid session
       fetchEvents();
       fetchInvites();
     }
-  }, [session, fetchInvites]);
+  }, [status, session, router, fetchEvents, fetchInvites]);
 
   useEffect(() => {
     // Check for prompt or openCreateModal in URL when component mounts
@@ -725,6 +722,7 @@ export default function Dashboard() {
     }
   }, []);
 
+  // Loading state
   if (status === 'loading') {
     return (
       <div className="min-h-screen bg-black text-white flex items-center justify-center">
@@ -733,8 +731,20 @@ export default function Dashboard() {
     );
   }
 
-  if (!session) {
-    return null;
+  // Handle session errors
+  if (session?.error === 'RefreshAccessTokenError') {
+    return (
+      <div className="min-h-screen bg-black text-white flex items-center justify-center">
+        <div className="text-red-500">
+          Session expired. Please sign in again.
+        </div>
+      </div>
+    );
+  }
+
+  // Protect the route
+  if (status === 'unauthenticated') {
+    return null; // Return null while redirecting
   }
 
   return (

@@ -114,6 +114,12 @@ export default function Home() {
     };
   }, [isListening]);
 
+  useEffect(() => {
+    if (session) {
+      router.replace("/dashboard", undefined);
+    }
+  }, [session, router]);
+
   const searchContactSuggestions = async (text: string) => {
     if (!text.trim()) {
       setSuggestedContacts([]);
@@ -155,7 +161,6 @@ export default function Home() {
   }
 
   if (session) {
-    router.push("/dashboard");
     return null;
   }
 
@@ -167,9 +172,20 @@ export default function Home() {
       setError(null);
 
       if (!session) {
-        // If not logged in, redirect to Google sign in
+        // If not logged in, redirect to Google sign in with proper scopes
         await signIn("google", {
           callbackUrl: `/dashboard?prompt=${encodeURIComponent(prompt)}`,
+          scope: [
+            'openid',
+            'https://www.googleapis.com/auth/userinfo.email',
+            'https://www.googleapis.com/auth/userinfo.profile',
+            'https://www.googleapis.com/auth/calendar',
+            'https://www.googleapis.com/auth/calendar.events',
+            'https://www.googleapis.com/auth/gmail.modify',
+            'https://www.googleapis.com/auth/gmail.send',
+            'https://www.googleapis.com/auth/gmail.compose',
+            'https://www.googleapis.com/auth/contacts.readonly'
+          ].join(' ')
         });
         return;
       }
@@ -198,37 +214,13 @@ export default function Home() {
           parsedRequest: null,
           currentQuestion: null,
         }));
-        
-        // Redirect to dashboard
-        router.push('/dashboard');
-      } else {
-        // If no parsed request, try to parse the prompt first
-        const parsedRequest = await parseMeetingRequest(prompt);
-        setVoiceState(prev => ({
-          ...prev,
-          parsedRequest,
-        }));
-        
-        // Create calendar event with parsed data
-        const response = await fetch('/api/calendar/create-event', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(parsedRequest),
-        });
 
-        if (!response.ok) {
-          const error = await response.json();
-          throw new Error(error.error || 'Failed to create calendar event');
-        }
-
-        // Show success and redirect
-        setPrompt('');
-        router.push('/dashboard');
+        // Use router.replace for consistent navigation
+        router.replace('/dashboard', undefined);
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to process request. Please try again.');
+    } catch (error) {
+      console.error('Error:', error);
+      setError('Failed to process your request. Please try again.');
     } finally {
       setIsLoading(false);
     }
