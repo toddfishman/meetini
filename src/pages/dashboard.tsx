@@ -792,14 +792,33 @@ export default function Dashboard() {
             onClick={() => setShowCalendar(!showCalendar)}
             className="w-full mb-4 px-6 py-3 bg-gray-900 text-teal-500 rounded-lg hover:bg-gray-800 transition-colors flex items-center justify-between"
           >
-            <span className="font-medium">View Your Current Calendar</span>
-            <span className="text-sm">
-              {showCalendar ? 'Hide Calendar' : 'Show Calendar'}
+            <div className="flex items-center gap-2">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+              <span className="font-medium">View Your Current Calendar</span>
+            </div>
+            <span className="text-sm flex items-center gap-1">
+              {showCalendar ? (
+                <>
+                  Hide Calendar
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </>
+              ) : (
+                <>
+                  Show Calendar
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
+                </>
+              )}
             </span>
           </button>
           
           {showCalendar && (
-            <div className="animate-fade-in">
+            <div className="transition-all duration-300 ease-in-out">
               <iframe
                 src={`https://calendar.google.com/calendar/embed?src=${encodeURIComponent(session?.user?.email || '')}&showTitle=0&showNav=1&showPrint=0&showTabs=1&showCalendars=1&height=600&mode=WEEK`}
                 style={{ border: 0 }}
