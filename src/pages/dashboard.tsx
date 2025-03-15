@@ -684,93 +684,173 @@ export default function Dashboard() {
                   {/* Participants */}
                   <div className="space-y-2">
                     <h5 className="text-xs font-medium text-gray-500">PARTICIPANTS</h5>
-                    <div className="mt-4 space-y-2 max-h-96 overflow-y-auto">
-                      <div className="sticky top-0 bg-gray-800 p-2 z-10 rounded-lg mb-2">
-                        <div className="flex items-center justify-between">
-                          <h4 className="text-sm font-medium text-gray-400">
-                            {selectedContacts.size > 0 
-                              ? `${selectedContacts.size + 1} participants selected`  // +1 for the user
-                              : '1 participant selected'  // Just the user
-                            }
-                          </h4>
-                          {meetingSummary.contacts.length > 0 && selectedContacts.size >= PARTICIPANT_WARNING_THRESHOLD && (
+                    
+                    {/* Meeting Organizer - Always shown */}
+                    {session?.user && (
+                      <div className="mb-4">
+                        <div className="flex items-center p-4 rounded-lg bg-teal-500/20 border border-teal-500">
+                          <div className="flex-shrink-0">
+                            <div className="w-12 h-12 rounded-full bg-teal-500 flex items-center justify-center text-white font-semibold">
+                              {session.user.name
+                                ? session.user.name.split(' ').map(n => n[0]).join('').toUpperCase()
+                                : session.user.email?.[0].toUpperCase()}
+                            </div>
+                          </div>
+                          <div className="ml-4 flex-grow">
+                            <div className="flex justify-between items-start">
+                              <div>
+                                <h4 className="font-medium text-white">{session.user.name || 'You'}</h4>
+                                <p className="text-sm text-gray-400">{session.user.email}</p>
+                              </div>
+                              <div className="text-right">
+                                <div className="text-sm text-teal-400">
+                                  <span className="inline-flex items-center px-2 py-1 rounded-full bg-teal-500/20 text-xs">
+                                    Meeting Organizer
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Selected Participants - Only shown when participants are selected */}
+                    {selectedContacts.size > 0 && (
+                      <div className="mb-4">
+                        <div className="flex items-center justify-between mb-2">
+                          <h6 className="text-sm text-gray-400">Selected Participants ({selectedContacts.size})</h6>
+                        </div>
+                        <div className="space-y-2">
+                          {meetingSummary?.contacts
+                            .filter(contact => selectedContacts.has(contact.email))
+                            .map(contact => (
+                              <button
+                                key={contact.email}
+                                className="w-full text-left"
+                                onClick={() => toggleContactSelection(contact.email)}
+                              >
+                                <div className="flex items-center p-4 rounded-lg bg-teal-500/20 border border-teal-500 hover:bg-teal-500/30 transition-all">
+                                  <div className="flex-shrink-0">
+                                    <div className="w-12 h-12 rounded-full bg-teal-500 flex items-center justify-center text-white font-semibold">
+                                      {contact.name
+                                        .split(' ')
+                                        .map(n => n[0])
+                                        .join('')
+                                        .toUpperCase()}
+                                    </div>
+                                  </div>
+                                  <div className="ml-4 flex-grow">
+                                    <div className="flex justify-between items-start">
+                                      <div>
+                                        <h4 className="font-medium text-white">{contact.name}</h4>
+                                        <p className="text-sm text-gray-400">{contact.email}</p>
+                                      </div>
+                                      <div className="text-right">
+                                        <div className="text-sm text-teal-400">
+                                          <span className="inline-flex items-center px-2 py-1 rounded-full bg-teal-500/20 text-xs">
+                                            Selected Participant
+                                          </span>
+                                        </div>
+                                        <div className="text-xs text-gray-400 mt-1">
+                                          Click to remove
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <div className="ml-4 flex-shrink-0">
+                                    <div className="w-4 h-4 rounded-full border-2 border-teal-500 bg-teal-500" />
+                                  </div>
+                                </div>
+                              </button>
+                            ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Search Results - Only shown when there are results */}
+                    {meetingSummary?.contacts.length > 0 && (
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <h6 className="text-sm text-gray-400">
+                            Suggested Participants ({meetingSummary.contacts.length})
+                          </h6>
+                          {selectedContacts.size >= PARTICIPANT_WARNING_THRESHOLD && (
                             <span className="text-xs text-yellow-500">
-                              {MAX_PARTICIPANTS - selectedContacts.size} spots remaining
+                              {MAX_PARTICIPANTS - selectedContacts.size - 1} spots remaining
                             </span>
                           )}
                         </div>
-                        {meetingSummary.contacts.length === 0 && (
-                          <p className="text-xs text-gray-500 mt-1">
-                            No additional participants found based on your prompt
-                          </p>
-                        )}
-                        {selectedContacts.size >= MAX_PARTICIPANTS && (
-                          <p className="text-xs text-red-500 mt-1">
-                            Maximum participants reached
-                          </p>
-                        )}
+                        <div className="space-y-2">
+                          {meetingSummary.contacts
+                            .filter(contact => !selectedContacts.has(contact.email))
+                            .map(contact => {
+                              const isDisabled = selectedContacts.size >= MAX_PARTICIPANTS - 1;
+                              
+                              return (
+                                <button
+                                  key={contact.email}
+                                  className="w-full text-left"
+                                  onClick={() => !isDisabled && toggleContactSelection(contact.email)}
+                                  disabled={isDisabled}
+                                >
+                                  <div className={`flex items-center p-4 rounded-lg transition-all ${
+                                    isDisabled
+                                      ? 'bg-gray-800/50 border border-transparent opacity-50 cursor-not-allowed'
+                                      : 'bg-gray-800 hover:bg-gray-700 border border-transparent'
+                                  }`}>
+                                    <div className="flex-shrink-0">
+                                      <div className="w-12 h-12 rounded-full bg-teal-500 flex items-center justify-center text-white font-semibold">
+                                        {contact.name
+                                          .split(' ')
+                                          .map(n => n[0])
+                                          .join('')
+                                          .toUpperCase()}
+                                      </div>
+                                    </div>
+                                    <div className="ml-4 flex-grow">
+                                      <div className="flex justify-between items-start">
+                                        <div>
+                                          <h4 className="font-medium text-white">{contact.name}</h4>
+                                          <p className="text-sm text-gray-400">{contact.email}</p>
+                                        </div>
+                                        <div className="text-right">
+                                          <div className="text-sm text-gray-400">
+                                            {contact.frequency > 0 && (
+                                              <span className="inline-flex items-center px-2 py-1 rounded-full bg-gray-700 text-xs">
+                                                {contact.frequency} recent interactions
+                                              </span>
+                                            )}
+                                          </div>
+                                          <div className="text-xs text-gray-500 mt-1">
+                                            Last contact: {contact.lastContact 
+                                              ? new Date(contact.lastContact).toLocaleDateString()
+                                              : 'No recent contact'}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </div>
+                                    <div className="ml-4 flex-shrink-0">
+                                      <div className={`w-4 h-4 rounded-full border-2 transition-colors ${
+                                        selectedContacts.has(contact.email) ? 'bg-teal-500 border-teal-500' : 'border-gray-500'
+                                      }`} />
+                                    </div>
+                                  </div>
+                                </button>
+                              );
+                            })}
+                        </div>
                       </div>
-                      {meetingSummary.contacts.map((contact) => {
-                        const isSelected = selectedContacts.has(contact.email);
-                        const isDisabled = !isSelected && selectedContacts.size >= MAX_PARTICIPANTS;
-                        
-                        return (
-                          <button
-                            key={contact.email}
-                            className="w-full text-left"
-                            onClick={() => !isDisabled && toggleContactSelection(contact.email)}
-                            disabled={isDisabled}
-                          >
-                            <div
-                              className={`flex items-center p-4 rounded-lg transition-all ${
-                                isSelected 
-                                  ? 'bg-teal-500/20 border border-teal-500' 
-                                  : isDisabled
-                                  ? 'bg-gray-800/50 border border-transparent opacity-50 cursor-not-allowed'
-                                  : 'bg-gray-800 hover:bg-gray-700 border border-transparent'
-                              }`}
-                            >
-                              <div className="flex-shrink-0">
-                                <div className="w-12 h-12 rounded-full bg-teal-500 flex items-center justify-center text-white font-semibold">
-                                  {contact.name
-                                    .split(' ')
-                                    .map(n => n[0])
-                                    .join('')
-                                    .toUpperCase()}
-                                </div>
-                              </div>
-                              <div className="ml-4 flex-grow">
-                                <div className="flex justify-between items-start">
-                                  <div>
-                                    <h4 className="font-medium text-white">{contact.name}</h4>
-                                    <p className="text-sm text-gray-400">{contact.email}</p>
-                                  </div>
-                                  <div className="text-right">
-                                    <div className="text-sm text-gray-400">
-                                      {contact.frequency > 0 && (
-                                        <span className="inline-flex items-center px-2 py-1 rounded-full bg-gray-700 text-xs">
-                                          {contact.frequency} recent interactions
-                                        </span>
-                                      )}
-                                    </div>
-                                    <div className="text-xs text-gray-500 mt-1">
-                                      Last contact: {contact.lastContact 
-                                        ? new Date(contact.lastContact).toLocaleDateString()
-                                        : 'No recent contact'}
-                                    </div>
-                                  </div>
-                                </div>
-                              </div>
-                              <div className="ml-4 flex-shrink-0">
-                                <div className={`w-4 h-4 rounded-full border-2 transition-colors ${
-                                  selectedContacts.has(contact.email) ? 'bg-teal-500 border-teal-500' : 'border-gray-500'
-                                }`} />
-                              </div>
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
+                    )}
+
+                    {/* No Results Message */}
+                    {meetingSummary && meetingSummary.contacts.length === 0 && (
+                      <div className="text-center p-4 rounded-lg bg-gray-800 border border-gray-700">
+                        <p className="text-sm text-gray-400">
+                          No additional participants found based on your prompt
+                        </p>
+                      </div>
+                    )}
                   </div>
 
                   {/* Meeting Type */}
