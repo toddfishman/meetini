@@ -30,13 +30,53 @@ function buildEmailQuery(names: string[]): string[] {
     const nameParts = name.split(' ');
     const exactMatch = `"${name}"`;
     
-    // For single-word names, also search without quotes but only in From/To
+    // For single-word names, be more lenient
     if (nameParts.length === 1) {
-      return `(${exactMatch} OR (from:${name} OR to:${name}))`;
+      const commonVariations = getNameVariations(name);
+      const variations = commonVariations.map(v => `"${v}"`).join(' OR ');
+      return `(${exactMatch} OR (from:${name} OR to:${name}) OR ${variations})`;
     }
     
-    return exactMatch;
+    return `(${exactMatch} OR (from:"${name}" OR to:"${name}"))`;
   });
+}
+
+// Add common name variations/nicknames
+function getNameVariations(name: string): string[] {
+  const lowerName = name.toLowerCase();
+  const variations: string[] = [name];
+  
+  // Common nickname mappings
+  const nicknames: { [key: string]: string[] } = {
+    'joe': ['joseph', 'joey'],
+    'jim': ['james', 'jimmy'],
+    'bob': ['robert', 'bobby', 'rob'],
+    'tom': ['thomas', 'tommy'],
+    'sam': ['samuel', 'sammy'],
+    'dan': ['daniel', 'danny'],
+    'mike': ['michael', 'mikey'],
+    'john': ['johnny', 'jonathan'],
+    'dave': ['david'],
+    'bill': ['william', 'billy', 'will'],
+    'pat': ['patrick', 'patricia'],
+    'kim': ['kimberly', 'kimberley'],
+    'ann': ['anne', 'anna']
+  };
+
+  // Add variations if they exist
+  if (nicknames[lowerName]) {
+    variations.push(...nicknames[lowerName]);
+  }
+  
+  // Check reverse mapping
+  for (const [nick, fullNames] of Object.entries(nicknames)) {
+    if (fullNames.includes(lowerName)) {
+      variations.push(nick);
+      variations.push(...fullNames);
+    }
+  }
+
+  return [...new Set(variations)];
 }
 
 function getExactNameMatchScore(contactName: string, searchName: string): number {
@@ -46,29 +86,37 @@ function getExactNameMatchScore(contactName: string, searchName: string): number
   // Exact match
   if (cn === sn) return 1;
   
-  // Check if contact name contains the full search name
-  if (cn.includes(sn)) return 0.9;
+  // Check variations of the name
+  const variations = getNameVariations(sn);
+  if (variations.some(v => v.toLowerCase() === cn)) return 0.95;
   
-  // Check if search name contains the full contact name
-  if (sn.includes(cn)) return 0.9;
+  // Check if contact name contains the full search name or vice versa
+  if (cn.includes(sn) || sn.includes(cn)) return 0.9;
   
   // Split into parts and check for exact part matches
   const contactParts = cn.split(' ').filter(p => p.length > 1);
   const searchParts = sn.split(' ').filter(p => p.length > 1);
   
-  const matchingParts = searchParts.filter(p => contactParts.some(cp => cp.includes(p) || p.includes(cp)));
-  if (matchingParts.length === searchParts.length) return 0.85;
+  // Check if any parts match exactly or are variations
+  for (const sp of searchParts) {
+    const spVariations = getNameVariations(sp);
+    if (contactParts.some(cp => 
+      spVariations.some(v => v.toLowerCase() === cp)
+    )) {
+      return 0.85;
+    }
+  }
   
   // Partial name matches (e.g., "tod" matches "todd")
   if (searchParts.some(p => 
     contactParts.some(cp => 
       cp.startsWith(p) || 
       p.startsWith(cp) ||
-      // Levenshtein distance for similar names
-      (p.length > 3 && cp.length > 3 && levenshteinDistance(p, cp) <= 2)
+      // More lenient Levenshtein distance
+      (p.length > 2 && cp.length > 2 && levenshteinDistance(p, cp) <= 2)
     )
   )) {
-    return 0.7;
+    return 0.6; // Lower threshold for fuzzy matches
   }
   
   return 0;
@@ -179,7 +227,7 @@ export async function searchEmailContacts(req: NextApiRequest, names: string[]):
             if (contact && contact.email !== token.email) {
               for (const searchName of names) {
                 const score = getExactNameMatchScore(contact.name, searchName);
-                if (score >= 0.7) { // More lenient threshold
+                if (score >= 0.6) { // More lenient threshold
                   const contactsForName = contactsByName.get(searchName)!;
                   const existing = contactsForName.get(contact.email.toLowerCase());
                   if (existing) {
@@ -192,6 +240,7 @@ export async function searchEmailContacts(req: NextApiRequest, names: string[]):
                     }
                     if (score > existing.confidence) {
                       existing.confidence = score;
+                      existing.matchedName = contact.name; // Store the matched name
                     }
                   } else {
                     contactsForName.set(contact.email.toLowerCase(), {
@@ -200,7 +249,7 @@ export async function searchEmailContacts(req: NextApiRequest, names: string[]):
                       frequency: 1,
                       lastContact: dateHeader ? new Date(dateHeader) : undefined,
                       confidence: score,
-                      matchedName: searchName
+                      matchedName: contact.name
                     });
                   }
                 }
@@ -215,7 +264,7 @@ export async function searchEmailContacts(req: NextApiRequest, names: string[]):
               if (contact && contact.email !== token.email) {
                 for (const searchName of names) {
                   const score = getExactNameMatchScore(contact.name, searchName);
-                  if (score >= 0.7) { // More lenient threshold
+                  if (score >= 0.6) { // More lenient threshold
                     const contactsForName = contactsByName.get(searchName)!;
                     const existing = contactsForName.get(contact.email.toLowerCase());
                     if (existing) {
@@ -228,6 +277,7 @@ export async function searchEmailContacts(req: NextApiRequest, names: string[]):
                       }
                       if (score > existing.confidence) {
                         existing.confidence = score;
+                        existing.matchedName = contact.name; // Store the matched name
                       }
                     } else {
                       contactsForName.set(contact.email.toLowerCase(), {
@@ -236,7 +286,7 @@ export async function searchEmailContacts(req: NextApiRequest, names: string[]):
                         frequency: 1,
                         lastContact: dateHeader ? new Date(dateHeader) : undefined,
                         confidence: score,
-                        matchedName: searchName
+                        matchedName: contact.name
                       });
                     }
                   }
