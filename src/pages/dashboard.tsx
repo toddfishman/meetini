@@ -105,8 +105,6 @@ declare global {
 export default function Dashboard() {
   const { data: session, status } = useSession();
   const router = useRouter();
-  const [expandedEvents, setExpandedEvents] = useState<string[]>([]);
-  const [activeTab, setActiveTab] = useState<'sent' | 'received'>('received');
   const [meetiniInvites, setMeetiniInvites] = useState<MeetiniInvite[]>([]);
   const [inviteLoading, setInviteLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -116,7 +114,6 @@ export default function Dashboard() {
   const [selectedContacts, setSelectedContacts] = useState<Set<string>>(new Set());
   const [meetingSummary, setMeetingSummary] = useState<MeetingSummary | null>(null);
   const [loading, setLoading] = useState(true);
-  const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [initialPrompt, setInitialPrompt] = useState<string | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmationDialogProps>({
@@ -135,6 +132,7 @@ export default function Dashboard() {
   });
   const [meetingType, setMeetingType] = useState<{ type: string | undefined; confidence: number }>({ type: undefined, confidence: 0 });
   const [showManualSetup, setShowManualSetup] = useState(false);
+  const [showCalendar, setShowCalendar] = useState(false);
 
   const showToast = useCallback((type: 'success' | 'error', message: string) => {
     const onClose = () => setToast(prev => ({ ...prev, show: false, onClose: () => {} }));
@@ -352,13 +350,13 @@ export default function Dashboard() {
       const response = await fetch('/api/calendar');
       const data = await response.json();
       if (!response.ok) throw new Error(data.error);
-      setEvents(data);
+      // Removed setEvents(data);
     } catch (error) {
       console.error('Failed to fetch calendar events:', error);
     } finally {
       setLoading(false);
     }
-  }, [setEvents, setLoading]);
+  }, []);
 
   useEffect(() => {
     if (status === 'unauthenticated') {
@@ -510,96 +508,6 @@ export default function Dashboard() {
     }
   }, [prompt, selectedContacts, meetingSummary, fetchInvites, showToast, detectMeetingType]);
 
-  const toggleEvent = useCallback((eventId: string) => {
-    setExpandedEvents(prev => {
-      const isExpanded = prev.includes(eventId);
-      return isExpanded 
-        ? prev.filter(id => id !== eventId)
-        : [...prev, eventId];
-    });
-  }, []);
-
-  const ContactDisplay = useCallback(({ contact, isSelected }: { contact: Contact; isSelected: boolean }) => {
-    const initials = contact.name
-      .split(' ')
-      .map(n => n[0])
-      .join('')
-      .toUpperCase();
-
-    const lastContactDate = contact.lastContact 
-      ? new Date(contact.lastContact).toLocaleDateString()
-      : 'No recent contact';
-
-    return (
-      <div
-        className={`flex items-center p-4 rounded-lg transition-all ${
-          isSelected 
-            ? 'bg-teal-500/20 border border-teal-500' 
-            : 'bg-gray-800 hover:bg-gray-700 border border-transparent'
-        }`}
-      >
-        <div className="flex-shrink-0">
-          <div className="w-12 h-12 rounded-full bg-teal-500 flex items-center justify-center text-white font-semibold">
-            {initials}
-          </div>
-        </div>
-        <div className="ml-4 flex-grow">
-          <div className="flex justify-between items-start">
-            <div>
-              <h4 className="font-medium text-white">{contact.name}</h4>
-              <p className="text-sm text-gray-400">{contact.email}</p>
-            </div>
-            <div className="text-right">
-              <div className="text-sm text-gray-400">
-                {contact.frequency > 0 && (
-                  <span className="inline-flex items-center px-2 py-1 rounded-full bg-gray-700 text-xs">
-                    {contact.frequency} recent interactions
-                  </span>
-                )}
-              </div>
-              <div className="text-xs text-gray-500 mt-1">
-                Last contact: {lastContactDate}
-              </div>
-            </div>
-          </div>
-        </div>
-        <div className="ml-4 flex-shrink-0">
-          <div className={`w-4 h-4 rounded-full border-2 transition-colors ${
-            isSelected ? 'bg-teal-500 border-teal-500' : 'border-gray-500'
-          }`} />
-        </div>
-      </div>
-    );
-  }, []);
-
-  const ContactList = useCallback(() => {
-    if (!meetingSummary?.contacts.length) {
-      return null;
-    }
-
-    return (
-      <div className="mt-4 space-y-2 max-h-96 overflow-y-auto">
-        <div className="sticky top-0 bg-gray-900 p-2 z-10">
-          <h4 className="text-sm font-medium text-gray-400">
-            {selectedContacts.size} contacts selected
-          </h4>
-        </div>
-        {meetingSummary.contacts.map((contact) => (
-          <button
-            key={contact.email}
-            className="w-full text-left"
-            onClick={() => toggleContactSelection(contact.email)}
-          >
-            <ContactDisplay
-              contact={contact}
-              isSelected={selectedContacts.has(contact.email)}
-            />
-          </button>
-        ))}
-      </div>
-    );
-  }, [meetingSummary?.contacts, selectedContacts, toggleContactSelection]);
-
   const handleInviteAction = useCallback(async (id: string, action: 'accept' | 'decline' | 'cancel') => {
     const confirmActions = {
       accept: {
@@ -694,21 +602,9 @@ export default function Dashboard() {
     });
   }, [showToast]);
 
-  const groupedEvents = useMemo(() => {
-    return events.reduce((groups: { [key: string]: CalendarEvent[] }, event) => {
-      const date = new Date(event.start.dateTime || event.start.date || Date.now());
-      const monthYear = date.toLocaleString('default', { month: 'long', year: 'numeric' });
-      if (!groups[monthYear]) {
-        groups[monthYear] = [];
-      }
-      groups[monthYear].push(event);
-      return groups;
-    }, {});
-  }, [events]);
-
   const filteredInvites = useMemo(() => 
-    meetiniInvites.filter(invite => invite.type === activeTab),
-    [meetiniInvites, activeTab]
+    meetiniInvites.filter(invite => invite.type === 'received'),
+    [meetiniInvites]
   );
 
   const getStatusColor = useCallback((status: MeetiniInvite['status']) => {
@@ -793,7 +689,60 @@ export default function Dashboard() {
                   {/* Participants */}
                   <div className="space-y-2">
                     <h5 className="text-xs font-medium text-gray-500">PARTICIPANTS</h5>
-                    <ContactList />
+                    <div className="mt-4 space-y-2 max-h-96 overflow-y-auto">
+                      {meetingSummary.contacts.map((contact) => (
+                        <button
+                          key={contact.email}
+                          className="w-full text-left"
+                          onClick={() => toggleContactSelection(contact.email)}
+                        >
+                          <div
+                            className={`flex items-center p-4 rounded-lg transition-all ${
+                              selectedContacts.has(contact.email) 
+                                ? 'bg-teal-500/20 border border-teal-500' 
+                                : 'bg-gray-800 hover:bg-gray-700 border border-transparent'
+                            }`}
+                          >
+                            <div className="flex-shrink-0">
+                              <div className="w-12 h-12 rounded-full bg-teal-500 flex items-center justify-center text-white font-semibold">
+                                {contact.name
+                                  .split(' ')
+                                  .map(n => n[0])
+                                  .join('')
+                                  .toUpperCase()}
+                              </div>
+                            </div>
+                            <div className="ml-4 flex-grow">
+                              <div className="flex justify-between items-start">
+                                <div>
+                                  <h4 className="font-medium text-white">{contact.name}</h4>
+                                  <p className="text-sm text-gray-400">{contact.email}</p>
+                                </div>
+                                <div className="text-right">
+                                  <div className="text-sm text-gray-400">
+                                    {contact.frequency > 0 && (
+                                      <span className="inline-flex items-center px-2 py-1 rounded-full bg-gray-700 text-xs">
+                                        {contact.frequency} recent interactions
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="text-xs text-gray-500 mt-1">
+                                    Last contact: {contact.lastContact 
+                                      ? new Date(contact.lastContact).toLocaleDateString()
+                                      : 'No recent contact'}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                            <div className="ml-4 flex-shrink-0">
+                              <div className={`w-4 h-4 rounded-full border-2 transition-colors ${
+                                selectedContacts.has(contact.email) ? 'bg-teal-500 border-teal-500' : 'border-gray-500'
+                              }`} />
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
                   </div>
 
                   {/* Meeting Type */}
@@ -837,55 +786,29 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Embed Google Calendar */}
+        {/* Embed Google Calendar with Toggle */}
         <div className="mb-16">
-          <iframe
-            src={`https://calendar.google.com/calendar/embed?src=${encodeURIComponent(session?.user?.email || '')}&showTitle=0&showNav=1&showPrint=0&showTabs=1&showCalendars=1&height=600&mode=WEEK`}
-            style={{ border: 0 }}
-            width="100%"
-            height="600"
-            frameBorder="0"
-            scrolling="no"
-            className="rounded-lg"
-          ></iframe>
-        </div>
-
-        {/* Calendar Events Section - Single Row Expandable */}
-        <div className="border border-gray-800 rounded-lg overflow-hidden mb-16">
           <button
-            className="w-full p-4 bg-gray-900 text-left font-medium text-teal-500 hover:bg-gray-800 transition-colors flex justify-between items-center"
-            onClick={() => setExpandedEvents(prev => 
-              prev.length === Object.keys(groupedEvents).length ? [] : Object.keys(groupedEvents)
-            )}
+            onClick={() => setShowCalendar(!showCalendar)}
+            className="w-full mb-4 px-6 py-3 bg-gray-900 text-teal-500 rounded-lg hover:bg-gray-800 transition-colors flex items-center justify-between"
           >
-            <div className="flex items-center gap-2">
-              <span className="text-lg">Calendar Events</span>
-              {loading && <span className="text-sm text-gray-400">(Loading...)</span>}
-            </div>
-            <span className="text-sm text-gray-400">
-              {events.length} total event{events.length !== 1 ? 's' : ''}
+            <span className="font-medium">View Your Current Calendar</span>
+            <span className="text-sm">
+              {showCalendar ? 'Hide Calendar' : 'Show Calendar'}
             </span>
           </button>
           
-          {expandedEvents.length > 0 && (
-            <div className="bg-black/30">
-              {Object.entries(groupedEvents).map(([monthYear, monthEvents]) => (
-                <div key={monthYear} className="border-t border-gray-800">
-                  <div className="p-4">
-                    <div className="font-medium text-teal-500 mb-2">{monthYear}</div>
-                    <div className="space-y-3">
-                      {monthEvents.map((event) => (
-                        <div key={event.id} className="pl-4 border-l-2 border-gray-800">
-                          <h3 className="font-medium text-white">{event.summary}</h3>
-                          <p className="text-sm text-gray-400">
-                            {new Date(event.start.dateTime || event.start.date || Date.now()).toLocaleString()}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              ))}
+          {showCalendar && (
+            <div className="animate-fade-in">
+              <iframe
+                src={`https://calendar.google.com/calendar/embed?src=${encodeURIComponent(session?.user?.email || '')}&showTitle=0&showNav=1&showPrint=0&showTabs=1&showCalendars=1&height=600&mode=WEEK`}
+                style={{ border: 0 }}
+                width="100%"
+                height="600"
+                frameBorder="0"
+                scrolling="no"
+                className="rounded-lg"
+              ></iframe>
             </div>
           )}
         </div>
@@ -902,29 +825,6 @@ export default function Dashboard() {
             </div>
           )}
 
-          <div className="flex space-x-4 mb-4">
-            <button
-              onClick={() => setActiveTab('received')}
-              className={`px-4 py-2 rounded-lg transition-colors ${
-                activeTab === 'received'
-                  ? 'bg-teal-500 text-white'
-                  : 'text-teal-500 border border-teal-500 hover:bg-teal-500/10'
-              }`}
-            >
-              Received
-            </button>
-            <button
-              onClick={() => setActiveTab('sent')}
-              className={`px-4 py-2 rounded-lg transition-colors ${
-                activeTab === 'sent'
-                  ? 'bg-teal-500 text-white'
-                  : 'text-teal-500 border border-teal-500 hover:bg-teal-500/10'
-              }`}
-            >
-              Sent
-            </button>
-          </div>
-          
           <div className="space-y-4">
             {inviteLoading ? (
               <p>Loading invitations...</p>
@@ -958,7 +858,7 @@ export default function Dashboard() {
                     
                     {/* Action Buttons */}
                     <div className="flex gap-2 pt-2">
-                      {invite.type === 'received' && invite.status === 'pending' && (
+                      {invite.status === 'pending' && (
                         <>
                           <button
                             onClick={() => handleInviteAction(invite.id, 'accept')}
@@ -974,20 +874,12 @@ export default function Dashboard() {
                           </button>
                         </>
                       )}
-                      {invite.type === 'sent' && invite.status === 'pending' && (
-                        <button
-                          onClick={() => handleInviteAction(invite.id, 'cancel')}
-                          className="px-3 py-1 bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors text-sm"
-                        >
-                          Cancel
-                        </button>
-                      )}
                     </div>
                   </div>
                 </div>
               ))
             ) : (
-              <p className="text-gray-400">No {activeTab} invitations found</p>
+              <p className="text-gray-400">No invitations found</p>
             )}
           </div>
         </div>
