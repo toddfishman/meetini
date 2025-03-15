@@ -213,15 +213,6 @@ export default function Dashboard() {
             suggestedTimes: prev?.suggestedTimes || []
           };
         });
-
-        const highConfidenceContacts = allContacts.filter(contact => contact.confidence >= 0.9);
-        if (highConfidenceContacts.length > 0) {
-          setSelectedContacts(prev => {
-            const newSet = new Set(prev);
-            highConfidenceContacts.forEach(contact => newSet.add(contact.email));
-            return newSet;
-          });
-        }
       }
     } catch (error) {
       console.error('Failed to search contacts:', error);
@@ -697,14 +688,22 @@ export default function Dashboard() {
                       <div className="sticky top-0 bg-gray-800 p-2 z-10 rounded-lg mb-2">
                         <div className="flex items-center justify-between">
                           <h4 className="text-sm font-medium text-gray-400">
-                            {selectedContacts.size} of {MAX_PARTICIPANTS} participants selected
+                            {selectedContacts.size > 0 
+                              ? `${selectedContacts.size + 1} participants selected`  // +1 for the user
+                              : '1 participant selected'  // Just the user
+                            }
                           </h4>
-                          {selectedContacts.size >= PARTICIPANT_WARNING_THRESHOLD && (
+                          {meetingSummary.contacts.length > 0 && selectedContacts.size >= PARTICIPANT_WARNING_THRESHOLD && (
                             <span className="text-xs text-yellow-500">
                               {MAX_PARTICIPANTS - selectedContacts.size} spots remaining
                             </span>
                           )}
                         </div>
+                        {meetingSummary.contacts.length === 0 && (
+                          <p className="text-xs text-gray-500 mt-1">
+                            No additional participants found based on your prompt
+                          </p>
+                        )}
                         {selectedContacts.size >= MAX_PARTICIPANTS && (
                           <p className="text-xs text-red-500 mt-1">
                             Maximum participants reached
