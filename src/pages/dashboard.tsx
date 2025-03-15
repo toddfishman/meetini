@@ -6,6 +6,7 @@ import Navbar from '../components/Navbar';
 import ConfirmationDialog from '../components/ConfirmationDialog';
 import Link from 'next/link';
 import Toast from '../components/Toast';
+import { FaCalendarAlt, FaChevronDown, FaChevronUp, FaCog } from 'react-icons/fa';
 
 interface CalendarEvent {
   id: string;
@@ -105,8 +106,6 @@ declare global {
 export default function Dashboard() {
   const { data: session, status } = useSession();
   const router = useRouter();
-  const [expandedEvents, setExpandedEvents] = useState<string[]>([]);
-  const [activeTab, setActiveTab] = useState<'sent' | 'received'>('received');
   const [meetiniInvites, setMeetiniInvites] = useState<MeetiniInvite[]>([]);
   const [inviteLoading, setInviteLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -115,10 +114,10 @@ export default function Dashboard() {
   const [isListening, setIsListening] = useState(false);
   const [selectedContacts, setSelectedContacts] = useState<Set<string>>(new Set());
   const [meetingSummary, setMeetingSummary] = useState<MeetingSummary | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [events, setEvents] = useState<CalendarEvent[]>([]);
+  const [loading, setLoading] = useState(false);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [initialPrompt, setInitialPrompt] = useState<string | null>(null);
+  const [showCalendar, setShowCalendar] = useState(false);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmationDialogProps>({
     isOpen: false,
     title: '',
@@ -135,13 +134,48 @@ export default function Dashboard() {
   });
   const [meetingType, setMeetingType] = useState<{ type: string | undefined; confidence: number }>({ type: undefined, confidence: 0 });
   const [showManualSetup, setShowManualSetup] = useState(false);
+  const [activeTab, setActiveTab] = useState<'sent' | 'received'>('received');
+
+  const MAX_PARTICIPANTS = 30;
+  const PARTICIPANT_WARNING_THRESHOLD = 20;
+
+  // Meeting type detection based on prompt keywords
+  const detectMeetingType = useCallback((prompt: string): { type: string; confidence: number } => {
+    const promptLower = prompt.toLowerCase();
+    
+    // Meeting type patterns based on our memories
+    const patterns = {
+      'coffee-chat': ['coffee', 'coffee chat', 'grab coffee', 'get coffee'],
+      'happy-hour': ['happy hour', 'drinks', 'beer', 'wine'],
+      'virtual': ['virtual', 'zoom', 'teams', 'google meet', 'online', 'call', 'video'],
+      'in-person': ['in person', 'in-person', 'lunch', 'dinner', 'meet up', 'office']
+    };
+
+    // Check each type with exact phrase matching
+    for (const [type, keywords] of Object.entries(patterns)) {
+      for (const keyword of keywords) {
+        if (promptLower.includes(keyword)) {
+          // Higher confidence for exact phrase matches
+          return { type, confidence: keyword.includes(' ') ? 0.95 : 0.9 };
+        }
+      }
+    }
+
+    // Default to in-person with lower confidence
+    return { type: 'in-person', confidence: 0.6 };
+  }, []);
 
   const showToast = useCallback((type: 'success' | 'error', message: string) => {
     const onClose = () => setToast(prev => ({ ...prev, show: false, onClose: () => {} }));
-    setToast({ show: true, type, message, onClose });
-    setTimeout(() => {
-      setToast(prev => ({ ...prev, show: false, onClose: () => {} }));
-    }, 5000);
+    setToast({
+      show: true,
+      message,
+      type,
+      onClose
+    });
+
+    // Auto-hide after 5 seconds
+    setTimeout(onClose, 5000);
   }, []);
 
   const stopListening = useCallback(() => {
@@ -347,71 +381,6 @@ export default function Dashboard() {
     }
   }, []);
 
-  const fetchEvents = useCallback(async () => {
-    try {
-      const response = await fetch('/api/calendar');
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error);
-      setEvents(data);
-    } catch (error) {
-      console.error('Failed to fetch calendar events:', error);
-    } finally {
-      setLoading(false);
-    }
-  }, [setEvents, setLoading]);
-
-  useEffect(() => {
-    if (status === 'unauthenticated') {
-      router.replace('/');
-    } else if (status === 'authenticated' && !session?.error) {
-      // Only fetch data if we have a valid session
-      fetchEvents();
-      fetchInvites();
-    }
-  }, [status, session, router, fetchEvents, fetchInvites]);
-
-  useEffect(() => {
-    // Check for prompt or openCreateModal in URL when component mounts
-    const prompt = router.query.prompt as string;
-    const shouldOpenModal = router.query.openCreateModal === 'true';
-    
-    if (prompt && !initialPrompt) {
-      setInitialPrompt(prompt);
-      setIsCreateModalOpen(true);
-    } else if (shouldOpenModal) {
-      setIsCreateModalOpen(true);
-      // Remove the query parameter without page reload
-      const { openCreateModal, ...query } = router.query;
-      router.replace({ pathname: router.pathname, query }, undefined, { shallow: true });
-    }
-  }, [router.query, initialPrompt]);
-
-  // Meeting type detection based on prompt keywords
-  const detectMeetingType = useCallback((prompt: string): { type: string; confidence: number } => {
-    const promptLower = prompt.toLowerCase();
-    
-    // Meeting type patterns based on our memories
-    const patterns = {
-      'coffee-chat': ['coffee', 'coffee chat', 'grab coffee', 'get coffee'],
-      'happy-hour': ['happy hour', 'drinks', 'beer', 'wine'],
-      'virtual': ['virtual', 'zoom', 'teams', 'google meet', 'online', 'call', 'video'],
-      'in-person': ['in person', 'in-person', 'lunch', 'dinner', 'meet up', 'office']
-    };
-
-    // Check each type with exact phrase matching
-    for (const [type, keywords] of Object.entries(patterns)) {
-      for (const keyword of keywords) {
-        if (promptLower.includes(keyword)) {
-          // Higher confidence for exact phrase matches
-          return { type, confidence: keyword.includes(' ') ? 0.95 : 0.9 };
-        }
-      }
-    }
-
-    // Default to in-person with lower confidence
-    return { type: 'in-person', confidence: 0.6 };
-  }, []);
-
   const createMeetini = useCallback(async () => {
     try {
       setIsProcessing(true);
@@ -421,6 +390,10 @@ export default function Dashboard() {
         throw new Error('Please select at least one participant');
       }
 
+      if (selectedContacts.size > MAX_PARTICIPANTS - 1) { // -1 to account for organizer
+        throw new Error(`Maximum ${MAX_PARTICIPANTS} participants allowed (including you as organizer)`);
+      }
+
       if (!prompt.trim()) {
         throw new Error('Please provide a meeting description');
       }
@@ -428,17 +401,22 @@ export default function Dashboard() {
       // Get meeting type from prompt
       const { type: detectedType } = detectMeetingType(prompt);
 
-      // Format participants for the API
-      const participants = Array.from(selectedContacts).map(email => {
-        const contact = meetingSummary?.contacts.find(c => c.email === email);
-        return {
-          email,
-          name: contact?.name || email.split('@')[0],
-          notifyByEmail: true
-        };
-      });
+      // Add the current user as organizer
+      const organizer = {
+        email: session?.user?.email!,
+        name: session?.user?.name || session?.user?.email!.split('@')[0],
+        notifyByEmail: false, // Don't notify organizer
+        isOrganizer: true
+      };
 
-      // Make the API request to our new create endpoint
+      // Format other participants
+      const participants = Array.from(selectedContacts).map(email => ({
+        email,
+        name: meetingSummary?.contacts.find(c => c.email === email)?.name || email.split('@')[0],
+        notifyByEmail: true
+      }));
+
+      // Make the API request to our create endpoint
       const response = await fetch('/api/meetini/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -446,7 +424,7 @@ export default function Dashboard() {
           invite: {
             type: prompt,
             description: `Created via Meetini\n\nOriginal prompt: ${prompt}`,
-            participants,
+            participants: [organizer, ...participants],
             suggestedTimes: meetingSummary?.suggestedTimes,
             location: detectedType === 'virtual' ? 'Virtual' : undefined
           }
@@ -508,97 +486,7 @@ export default function Dashboard() {
     } finally {
       setIsProcessing(false);
     }
-  }, [prompt, selectedContacts, meetingSummary, fetchInvites, showToast, detectMeetingType]);
-
-  const toggleEvent = useCallback((eventId: string) => {
-    setExpandedEvents(prev => {
-      const isExpanded = prev.includes(eventId);
-      return isExpanded 
-        ? prev.filter(id => id !== eventId)
-        : [...prev, eventId];
-    });
-  }, []);
-
-  const ContactDisplay = useCallback(({ contact, isSelected }: { contact: Contact; isSelected: boolean }) => {
-    const initials = contact.name
-      .split(' ')
-      .map(n => n[0])
-      .join('')
-      .toUpperCase();
-
-    const lastContactDate = contact.lastContact 
-      ? new Date(contact.lastContact).toLocaleDateString()
-      : 'No recent contact';
-
-    return (
-      <div
-        className={`flex items-center p-4 rounded-lg transition-all ${
-          isSelected 
-            ? 'bg-teal-500/20 border border-teal-500' 
-            : 'bg-gray-800 hover:bg-gray-700 border border-transparent'
-        }`}
-      >
-        <div className="flex-shrink-0">
-          <div className="w-12 h-12 rounded-full bg-teal-500 flex items-center justify-center text-white font-semibold">
-            {initials}
-          </div>
-        </div>
-        <div className="ml-4 flex-grow">
-          <div className="flex justify-between items-start">
-            <div>
-              <h4 className="font-medium text-white">{contact.name}</h4>
-              <p className="text-sm text-gray-400">{contact.email}</p>
-            </div>
-            <div className="text-right">
-              <div className="text-sm text-gray-400">
-                {contact.frequency > 0 && (
-                  <span className="inline-flex items-center px-2 py-1 rounded-full bg-gray-700 text-xs">
-                    {contact.frequency} recent interactions
-                  </span>
-                )}
-              </div>
-              <div className="text-xs text-gray-500 mt-1">
-                Last contact: {lastContactDate}
-              </div>
-            </div>
-          </div>
-        </div>
-        <div className="ml-4 flex-shrink-0">
-          <div className={`w-4 h-4 rounded-full border-2 transition-colors ${
-            isSelected ? 'bg-teal-500 border-teal-500' : 'border-gray-500'
-          }`} />
-        </div>
-      </div>
-    );
-  }, []);
-
-  const ContactList = useCallback(() => {
-    if (!meetingSummary?.contacts.length) {
-      return null;
-    }
-
-    return (
-      <div className="mt-4 space-y-2 max-h-96 overflow-y-auto">
-        <div className="sticky top-0 bg-gray-900 p-2 z-10">
-          <h4 className="text-sm font-medium text-gray-400">
-            {selectedContacts.size} contacts selected
-          </h4>
-        </div>
-        {meetingSummary.contacts.map((contact) => (
-          <button
-            key={contact.email}
-            className="w-full text-left"
-            onClick={() => toggleContactSelection(contact.email)}
-          >
-            <ContactDisplay
-              contact={contact}
-              isSelected={selectedContacts.has(contact.email)}
-            />
-          </button>
-        ))}
-      </div>
-    );
-  }, [meetingSummary?.contacts, selectedContacts, toggleContactSelection]);
+  }, [prompt, selectedContacts, meetingSummary, session, showToast, detectMeetingType]);
 
   const handleInviteAction = useCallback(async (id: string, action: 'accept' | 'decline' | 'cancel') => {
     const confirmActions = {
@@ -694,23 +582,6 @@ export default function Dashboard() {
     });
   }, [showToast]);
 
-  const groupedEvents = useMemo(() => {
-    return events.reduce((groups: { [key: string]: CalendarEvent[] }, event) => {
-      const date = new Date(event.start.dateTime || event.start.date || Date.now());
-      const monthYear = date.toLocaleString('default', { month: 'long', year: 'numeric' });
-      if (!groups[monthYear]) {
-        groups[monthYear] = [];
-      }
-      groups[monthYear].push(event);
-      return groups;
-    }, {});
-  }, [events]);
-
-  const filteredInvites = useMemo(() => 
-    meetiniInvites.filter(invite => invite.type === activeTab),
-    [meetiniInvites, activeTab]
-  );
-
   const getStatusColor = useCallback((status: MeetiniInvite['status']) => {
     switch (status) {
       case 'accepted':
@@ -721,6 +592,36 @@ export default function Dashboard() {
         return 'text-yellow-500';
     }
   }, []);
+
+  useEffect(() => {
+    if (status === 'unauthenticated') {
+      router.replace('/');
+    } else if (status === 'authenticated' && !session?.error) {
+      // Only fetch data if we have a valid session
+      fetchInvites();
+    }
+  }, [status, session, router, fetchInvites]);
+
+  useEffect(() => {
+    // Check for prompt or openCreateModal in URL when component mounts
+    const prompt = router.query.prompt as string;
+    const shouldOpenModal = router.query.openCreateModal === 'true';
+    
+    if (prompt && !initialPrompt) {
+      setInitialPrompt(prompt);
+      setIsCreateModalOpen(true);
+    } else if (shouldOpenModal) {
+      setIsCreateModalOpen(true);
+      // Remove the query parameter without page reload
+      const { openCreateModal, ...query } = router.query;
+      router.replace({ pathname: router.pathname, query }, undefined, { shallow: true });
+    }
+  }, [router.query, initialPrompt]);
+
+  const filteredInvites = useMemo(() => 
+    meetiniInvites.filter(invite => invite.type === activeTab),
+    [meetiniInvites, activeTab]
+  );
 
   // Loading state
   if (status === 'loading') {
@@ -750,268 +651,306 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen bg-black text-white">
       <Navbar />
-      <div className="max-w-6xl mx-auto px-4 pt-36">
-        <div className="bg-gray-900 p-8 rounded-lg mb-16">
-          <div className="max-w-3xl mx-auto">
-            <h3 className="text-xl font-semibold text-white mb-4">Schedule a Meeting</h3>
-            <p className="text-gray-400 mb-6">Tell me what kind of meeting you want to schedule and with whom.</p>
-            
-            <div className="relative mb-6">
-              <textarea
-                value={prompt}
-                onChange={handlePromptChange}
-                placeholder="e.g. Schedule a coffee meeting with John tomorrow morning"
-                className={`w-full p-4 bg-gray-800 text-white rounded-lg mb-2 min-h-[100px] resize-none transition-opacity ${
-                  isProcessing ? 'opacity-50' : 'opacity-100'
-                }`}
-                disabled={isProcessing}
-              />
-              
-              <button
-                onClick={startListening}
-                className={`absolute top-2 right-2 p-2 rounded-full ${
-                  isListening ? 'bg-red-500' : 'bg-teal-500'
-                } hover:opacity-80 transition-colors`}
-                disabled={isProcessing}
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                </svg>
-              </button>
-            </div>
+      <div className="max-w-7xl mx-auto px-4 pt-36">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Left Column - Meeting Creation */}
+          <div className="lg:col-span-2">
+            <div className="bg-gray-900 p-8 rounded-lg mb-8">
+              <div className="max-w-3xl">
+                <div className="flex justify-between items-center mb-6">
+                  <h3 className="text-xl font-semibold text-white">Schedule a Meeting</h3>
+                  <Link href="/settings">
+                    <button className="flex items-center space-x-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors text-teal-500">
+                      <FaCog className="w-4 h-4" />
+                      <span>Customize Preferences</span>
+                    </button>
+                  </Link>
+                </div>
+                <p className="text-gray-400 mb-6">Tell me what kind of meeting you want to schedule and with whom.</p>
+                
+                <div className="relative mb-6">
+                  <textarea
+                    value={prompt}
+                    onChange={handlePromptChange}
+                    placeholder="e.g. Schedule a coffee meeting with John tomorrow morning"
+                    className={`w-full p-4 bg-gray-800 text-white rounded-lg mb-2 min-h-[100px] resize-none transition-opacity ${
+                      isProcessing ? 'opacity-50' : 'opacity-100'
+                    }`}
+                    disabled={isProcessing}
+                  />
+                  
+                  <button
+                    onClick={startListening}
+                    className={`absolute top-2 right-2 p-2 rounded-full ${
+                      isListening ? 'bg-red-500' : 'bg-teal-500'
+                    } hover:opacity-80 transition-colors`}
+                    disabled={isProcessing}
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                    </svg>
+                  </button>
+                </div>
 
-            {error && (
-              <div className="mb-4 p-3 bg-red-500/10 border border-red-500 rounded text-red-500">
-                {error}
-              </div>
-            )}
-
-            {meetingSummary && (
-              <div className="mb-6 p-4 bg-gray-800 rounded-lg">
-                <h4 className="text-sm font-medium text-gray-400 mb-3">Meeting Summary</h4>
-                <div className="space-y-4">
-                  {/* Participants */}
-                  <div className="space-y-2">
-                    <h5 className="text-xs font-medium text-gray-500">PARTICIPANTS</h5>
-                    <ContactList />
+                {error && (
+                  <div className="mb-4 p-3 bg-red-500/10 border border-red-500 rounded text-red-500">
+                    {error}
                   </div>
+                )}
 
-                  {/* Meeting Type */}
-                  {meetingSummary.type && (
-                    <div>
-                      <h5 className="text-xs font-medium text-gray-500 mb-1">TYPE</h5>
-                      <div className="flex items-center space-x-2">
-                        <div className="w-2 h-2 rounded-full bg-purple-500"></div>
-                        <span className="text-white capitalize">
-                          {meetingSummary.type}
-                        </span>
+                {meetingSummary && (
+                  <div className="mb-6 p-4 bg-gray-800 rounded-lg">
+                    <h4 className="text-sm font-medium text-gray-400 mb-3">Meeting Summary</h4>
+                    <div className="space-y-4">
+                      {/* Organizer */}
+                      <div className="space-y-2">
+                        <h5 className="text-xs font-medium text-gray-500">ORGANIZER</h5>
+                        <div className="p-4 bg-gray-700/50 rounded-lg">
+                          <div className="flex items-center">
+                            <div className="w-10 h-10 rounded-full bg-teal-500 flex items-center justify-center text-white font-semibold">
+                              {session?.user?.name?.[0] || session?.user?.email?.[0] || '?'}
+                            </div>
+                            <div className="ml-3">
+                              <div className="font-medium">{session?.user?.name || 'You'}</div>
+                              <div className="text-sm text-gray-400">{session?.user?.email}</div>
+                            </div>
+                            <div className="ml-auto">
+                              <span className="px-2 py-1 text-xs bg-teal-500/20 text-teal-500 rounded-full">
+                                Organizer
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Selected Participants */}
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-center">
+                          <h5 className="text-xs font-medium text-gray-500">SELECTED PARTICIPANTS</h5>
+                          <span className="text-xs text-gray-500">
+                            {selectedContacts.size}/{MAX_PARTICIPANTS - 1} max
+                          </span>
+                        </div>
+                        {selectedContacts.size > 0 ? (
+                          <div className="space-y-2">
+                            {Array.from(selectedContacts).map(email => {
+                              const contact = meetingSummary.contacts.find(c => c.email === email);
+                              return (
+                                <div key={email} className="p-4 bg-gray-700/50 rounded-lg">
+                                  <div className="flex items-center">
+                                    <div className="w-10 h-10 rounded-full bg-gray-600 flex items-center justify-center text-white font-semibold">
+                                      {contact?.name?.[0] || email[0]}
+                                    </div>
+                                    <div className="ml-3">
+                                      <div className="font-medium">{contact?.name || email}</div>
+                                      <div className="text-sm text-gray-400">{email}</div>
+                                    </div>
+                                    <button
+                                      onClick={() => toggleContactSelection(email)}
+                                      className="ml-auto text-gray-400 hover:text-red-500"
+                                    >
+                                      Remove
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div className="text-center p-4 bg-gray-700/50 rounded-lg text-gray-400">
+                            No participants selected
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Suggested Participants */}
+                      <div className="space-y-2">
+                        <h5 className="text-xs font-medium text-gray-500">SUGGESTED PARTICIPANTS</h5>
+                        <div className="space-y-2">
+                          {meetingSummary.contacts
+                            .filter(contact => !selectedContacts.has(contact.email))
+                            .map(contact => (
+                              <button
+                                key={contact.email}
+                                onClick={() => toggleContactSelection(contact.email)}
+                                disabled={selectedContacts.size >= MAX_PARTICIPANTS - 1}
+                                className={`w-full p-4 bg-gray-700/50 rounded-lg transition-colors ${
+                                  selectedContacts.size >= MAX_PARTICIPANTS - 1
+                                    ? 'opacity-50 cursor-not-allowed'
+                                    : 'hover:bg-gray-600/50'
+                                }`}
+                              >
+                                <div className="flex items-center">
+                                  <div className="w-10 h-10 rounded-full bg-gray-600 flex items-center justify-center text-white font-semibold">
+                                    {contact.name[0]}
+                                  </div>
+                                  <div className="ml-3 text-left">
+                                    <div className="font-medium">{contact.name}</div>
+                                    <div className="text-sm text-gray-400">{contact.email}</div>
+                                  </div>
+                                  <div className="ml-auto">
+                                    <span className="px-2 py-1 text-xs bg-gray-600 rounded-full">
+                                      {Math.round(contact.confidence * 100)}% match
+                                    </span>
+                                  </div>
+                                </div>
+                              </button>
+                            ))}
+                        </div>
+                      </div>
+
+                      {/* Create Meeting Button */}
+                      <div className="pt-4">
+                        <button
+                          onClick={createMeetini}
+                          disabled={isProcessing || selectedContacts.size === 0}
+                          className={`w-full py-3 px-4 rounded-lg font-medium transition-colors ${
+                            isProcessing || selectedContacts.size === 0
+                              ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
+                              : 'bg-teal-500 hover:bg-teal-600 text-white'
+                          }`}
+                        >
+                          {isProcessing ? 'Creating...' : 'Create Meeting'}
+                        </button>
                       </div>
                     </div>
-                  )}
-
-                  {/* Create Button */}
-                  <div className="pt-4">
-                    <button
-                      onClick={createMeetini}
-                      disabled={isProcessing || selectedContacts.size === 0}
-                      className={`w-full px-6 py-3 bg-teal-500 text-white rounded-lg transition-colors ${
-                        isProcessing || selectedContacts.size === 0 
-                          ? 'opacity-50 cursor-not-allowed' 
-                          : 'hover:bg-teal-600'
-                      }`}
-                    >
-                      {isProcessing ? 'Creating Meetini...' : 'Create Meetini'}
-                    </button>
                   </div>
+                )}
+              </div>
+            </div>
+
+          </div>
+
+          {/* Right Column - Calendar and Invitations */}
+          <div className="lg:col-span-1 space-y-8">
+            {/* Calendar Section */}
+            <div className="bg-gray-900 p-6 rounded-lg sticky top-24">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-medium text-white">Your Calendar</h3>
+                <button
+                  onClick={() => setShowCalendar(!showCalendar)}
+                  className="flex items-center space-x-2 text-teal-500 hover:text-teal-400 transition-colors"
+                >
+                  <FaCalendarAlt className="w-4 h-4" />
+                  {showCalendar ? <FaChevronUp className="w-3 h-3" /> : <FaChevronDown className="w-3 h-3" />}
+                </button>
+              </div>
+              
+              <div
+                className={`transition-all duration-300 ease-in-out overflow-hidden ${
+                  showCalendar ? 'max-h-[600px]' : 'max-h-0'
+                }`}
+              >
+                <div className="bg-white rounded-lg">
+                  <iframe
+                    src={`https://calendar.google.com/calendar/embed?src=${encodeURIComponent(session?.user?.email || '')}&showPrint=0&showTabs=0&showCalendars=0&mode=WEEK&height=400`}
+                    className="w-full h-[400px] border-0"
+                    frameBorder="0"
+                    scrolling="no"
+                  />
                 </div>
               </div>
-            )}
+            </div>
 
-            <div className="flex justify-center space-x-4">
-              <Link href="/settings">
-                <button className="px-6 py-3 bg-gray-700 text-white rounded-lg hover:bg-gray-600 transition-colors whitespace-nowrap flex items-center justify-center space-x-2">
-                  <span>Customize Settings 🍸</span>
+            {/* Invitations Section */}
+            <div className="bg-gray-900 p-6 rounded-lg">
+              <h3 className="text-lg font-medium text-white mb-6">Your Invitations</h3>
+              
+              <div className="flex space-x-4 mb-6">
+                <button
+                  onClick={() => setActiveTab('received')}
+                  className={`px-4 py-2 rounded-lg transition-colors ${
+                    activeTab === 'received'
+                      ? 'bg-teal-500 text-white'
+                      : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                  }`}
+                >
+                  Received
                 </button>
-              </Link>
-            </div>
-          </div>
-        </div>
+                <button
+                  onClick={() => setActiveTab('sent')}
+                  className={`px-4 py-2 rounded-lg transition-colors ${
+                    activeTab === 'sent'
+                      ? 'bg-teal-500 text-white'
+                      : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                  }`}
+                >
+                  Sent
+                </button>
+              </div>
 
-        {/* Embed Google Calendar */}
-        <div className="mb-16">
-          <iframe
-            src={`https://calendar.google.com/calendar/embed?src=${encodeURIComponent(session?.user?.email || '')}&showTitle=0&showNav=1&showPrint=0&showTabs=1&showCalendars=1&height=600&mode=WEEK`}
-            style={{ border: 0 }}
-            width="100%"
-            height="600"
-            frameBorder="0"
-            scrolling="no"
-            className="rounded-lg"
-          ></iframe>
-        </div>
-
-        {/* Calendar Events Section - Single Row Expandable */}
-        <div className="border border-gray-800 rounded-lg overflow-hidden mb-16">
-          <button
-            className="w-full p-4 bg-gray-900 text-left font-medium text-teal-500 hover:bg-gray-800 transition-colors flex justify-between items-center"
-            onClick={() => setExpandedEvents(prev => 
-              prev.length === Object.keys(groupedEvents).length ? [] : Object.keys(groupedEvents)
-            )}
-          >
-            <div className="flex items-center gap-2">
-              <span className="text-lg">Calendar Events</span>
-              {loading && <span className="text-sm text-gray-400">(Loading...)</span>}
-            </div>
-            <span className="text-sm text-gray-400">
-              {events.length} total event{events.length !== 1 ? 's' : ''}
-            </span>
-          </button>
-          
-          {expandedEvents.length > 0 && (
-            <div className="bg-black/30">
-              {Object.entries(groupedEvents).map(([monthYear, monthEvents]) => (
-                <div key={monthYear} className="border-t border-gray-800">
-                  <div className="p-4">
-                    <div className="font-medium text-teal-500 mb-2">{monthYear}</div>
-                    <div className="space-y-3">
-                      {monthEvents.map((event) => (
-                        <div key={event.id} className="pl-4 border-l-2 border-gray-800">
-                          <h3 className="font-medium text-white">{event.summary}</h3>
-                          <p className="text-sm text-gray-400">
-                            {new Date(event.start.dateTime || event.start.date || Date.now()).toLocaleString()}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+              {inviteLoading ? (
+                <div className="text-center py-8">
+                  <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-teal-500 mx-auto"></div>
                 </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Meetini Invitations Section */}
-        <div className="space-y-4">
-          <div className="flex justify-between items-center">
-            <h2 className="text-xl font-semibold">Your Meetini Invitations</h2>
-          </div>
-
-          {error && (
-            <div className="bg-red-500/10 border border-red-500 text-red-500 p-4 rounded-lg">
-              {error}
-            </div>
-          )}
-
-          <div className="flex space-x-4 mb-4">
-            <button
-              onClick={() => setActiveTab('received')}
-              className={`px-4 py-2 rounded-lg transition-colors ${
-                activeTab === 'received'
-                  ? 'bg-teal-500 text-white'
-                  : 'text-teal-500 border border-teal-500 hover:bg-teal-500/10'
-              }`}
-            >
-              Received
-            </button>
-            <button
-              onClick={() => setActiveTab('sent')}
-              className={`px-4 py-2 rounded-lg transition-colors ${
-                activeTab === 'sent'
-                  ? 'bg-teal-500 text-white'
-                  : 'text-teal-500 border border-teal-500 hover:bg-teal-500/10'
-              }`}
-            >
-              Sent
-            </button>
-          </div>
-          
-          <div className="space-y-4">
-            {inviteLoading ? (
-              <p>Loading invitations...</p>
-            ) : filteredInvites.length > 0 ? (
-              filteredInvites.map((invite) => (
-                <div key={invite.id} className="border border-gray-800 rounded-lg p-4 hover:border-teal-500 transition-colors">
-                  <div className="flex justify-between items-start mb-2">
-                    <h3 className="text-lg font-medium text-teal-500">{invite.title}</h3>
-                    <span className={`px-2 py-1 rounded text-sm ${getStatusColor(invite.status)}`}>
-                      {invite.status.charAt(0).toUpperCase() + invite.status.slice(1)}
-                    </span>
-                  </div>
-                  <div className="space-y-2 text-sm text-gray-400">
-                    <p>
-                      <span className="font-medium">Participants: </span>
-                      {invite.participants.join(', ')}
-                    </p>
-                    <p>
-                      <span className="font-medium">Location: </span>
-                      {invite.location || 'To be determined'}
-                    </p>
-                    <p>
-                      <span className="font-medium">Proposed Times: </span>
-                      {invite.proposedTimes.map(time => 
-                        new Date(time).toLocaleString()
-                      ).join(', ')}
-                    </p>
-                    <p className="text-xs">
-                      Created {new Date(invite.createdAt).toLocaleDateString()}
-                    </p>
-                    
-                    {/* Action Buttons */}
-                    <div className="flex gap-2 pt-2">
-                      {invite.type === 'received' && invite.status === 'pending' && (
-                        <>
+              ) : filteredInvites.length > 0 ? (
+                <div className="space-y-4">
+                  {filteredInvites.map((invite) => (
+                    <div key={invite.id} className="p-4 bg-gray-800 rounded-lg">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <h4 className="font-medium text-white">{invite.title}</h4>
+                          <p className="text-sm text-gray-400 mt-1">
+                            {new Date(invite.createdAt).toLocaleDateString()}
+                          </p>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {invite.participants.map((participant, index) => (
+                              <span
+                                key={index}
+                                className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-gray-700 text-gray-300"
+                              >
+                                {participant}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <span className={`text-sm ${getStatusColor(invite.status)}`}>
+                            {invite.status.charAt(0).toUpperCase() + invite.status.slice(1)}
+                          </span>
+                        </div>
+                      </div>
+                      {activeTab === 'received' && invite.status === 'pending' && (
+                        <div className="mt-4 flex space-x-2">
                           <button
                             onClick={() => handleInviteAction(invite.id, 'accept')}
-                            className="px-3 py-1 bg-green-500 text-white rounded hover:bg-green-600 transition-colors text-sm"
+                            className="px-3 py-1 bg-teal-500 text-white rounded hover:bg-teal-600 transition-colors"
                           >
                             Accept
                           </button>
                           <button
                             onClick={() => handleInviteAction(invite.id, 'decline')}
-                            className="px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600 transition-colors text-sm"
+                            className="px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600 transition-colors"
                           >
                             Decline
                           </button>
-                        </>
+                        </div>
                       )}
-                      {invite.type === 'sent' && invite.status === 'pending' && (
-                        <button
-                          onClick={() => handleInviteAction(invite.id, 'cancel')}
-                          className="px-3 py-1 bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors text-sm"
-                        >
-                          Cancel
-                        </button>
+                      {activeTab === 'sent' && invite.status === 'pending' && (
+                        <div className="mt-4">
+                          <button
+                            onClick={() => handleInviteAction(invite.id, 'cancel')}
+                            className="px-3 py-1 bg-gray-700 text-white rounded hover:bg-gray-600 transition-colors"
+                          >
+                            Cancel
+                          </button>
+                        </div>
                       )}
                     </div>
-                  </div>
+                  ))}
                 </div>
-              ))
-            ) : (
-              <p className="text-gray-400">No {activeTab} invitations found</p>
-            )}
+              ) : (
+                <div className="text-center py-8 text-gray-400">
+                  No {activeTab} invitations
+                </div>
+              )}
+            </div>
           </div>
         </div>
-
-        {confirmDialog.isOpen && (
-          <ConfirmationDialog
-            isOpen={confirmDialog.isOpen}
-            title={confirmDialog.title}
-            message={confirmDialog.message}
-            onClose={confirmDialog.onClose}
-            onConfirm={confirmDialog.onConfirm}
-            type={confirmDialog.type}
-          />
-        )}
-
-        {toast.show && (
-          <Toast
-            show={toast.show}
-            message={toast.message}
-            type={toast.type}
-            onClose={toast.onClose}
-          />
-        )}
       </div>
+
+      <ConfirmationDialog {...confirmDialog} />
+      <Toast {...toast} />
     </div>
   );
 }
