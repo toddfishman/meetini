@@ -134,6 +134,10 @@ export default function Dashboard() {
   const [showManualSetup, setShowManualSetup] = useState(false);
   const [showCalendar, setShowCalendar] = useState(false);
 
+  // Constants
+  const MAX_PARTICIPANTS = 30;
+  const PARTICIPANT_WARNING_THRESHOLD = 20;
+
   const showToast = useCallback((type: 'success' | 'error', message: string) => {
     const onClose = () => setToast(prev => ({ ...prev, show: false, onClose: () => {} }));
     setToast({ show: true, type, message, onClose });
@@ -690,58 +694,83 @@ export default function Dashboard() {
                   <div className="space-y-2">
                     <h5 className="text-xs font-medium text-gray-500">PARTICIPANTS</h5>
                     <div className="mt-4 space-y-2 max-h-96 overflow-y-auto">
-                      {meetingSummary.contacts.map((contact) => (
-                        <button
-                          key={contact.email}
-                          className="w-full text-left"
-                          onClick={() => toggleContactSelection(contact.email)}
-                        >
-                          <div
-                            className={`flex items-center p-4 rounded-lg transition-all ${
-                              selectedContacts.has(contact.email) 
-                                ? 'bg-teal-500/20 border border-teal-500' 
-                                : 'bg-gray-800 hover:bg-gray-700 border border-transparent'
-                            }`}
+                      <div className="sticky top-0 bg-gray-800 p-2 z-10 rounded-lg mb-2">
+                        <div className="flex items-center justify-between">
+                          <h4 className="text-sm font-medium text-gray-400">
+                            {selectedContacts.size} of {MAX_PARTICIPANTS} participants selected
+                          </h4>
+                          {selectedContacts.size >= PARTICIPANT_WARNING_THRESHOLD && (
+                            <span className="text-xs text-yellow-500">
+                              {MAX_PARTICIPANTS - selectedContacts.size} spots remaining
+                            </span>
+                          )}
+                        </div>
+                        {selectedContacts.size >= MAX_PARTICIPANTS && (
+                          <p className="text-xs text-red-500 mt-1">
+                            Maximum participants reached
+                          </p>
+                        )}
+                      </div>
+                      {meetingSummary.contacts.map((contact) => {
+                        const isSelected = selectedContacts.has(contact.email);
+                        const isDisabled = !isSelected && selectedContacts.size >= MAX_PARTICIPANTS;
+                        
+                        return (
+                          <button
+                            key={contact.email}
+                            className="w-full text-left"
+                            onClick={() => !isDisabled && toggleContactSelection(contact.email)}
+                            disabled={isDisabled}
                           >
-                            <div className="flex-shrink-0">
-                              <div className="w-12 h-12 rounded-full bg-teal-500 flex items-center justify-center text-white font-semibold">
-                                {contact.name
-                                  .split(' ')
-                                  .map(n => n[0])
-                                  .join('')
-                                  .toUpperCase()}
-                              </div>
-                            </div>
-                            <div className="ml-4 flex-grow">
-                              <div className="flex justify-between items-start">
-                                <div>
-                                  <h4 className="font-medium text-white">{contact.name}</h4>
-                                  <p className="text-sm text-gray-400">{contact.email}</p>
-                                </div>
-                                <div className="text-right">
-                                  <div className="text-sm text-gray-400">
-                                    {contact.frequency > 0 && (
-                                      <span className="inline-flex items-center px-2 py-1 rounded-full bg-gray-700 text-xs">
-                                        {contact.frequency} recent interactions
-                                      </span>
-                                    )}
-                                  </div>
-                                  <div className="text-xs text-gray-500 mt-1">
-                                    Last contact: {contact.lastContact 
-                                      ? new Date(contact.lastContact).toLocaleDateString()
-                                      : 'No recent contact'}
-                                  </div>
+                            <div
+                              className={`flex items-center p-4 rounded-lg transition-all ${
+                                isSelected 
+                                  ? 'bg-teal-500/20 border border-teal-500' 
+                                  : isDisabled
+                                  ? 'bg-gray-800/50 border border-transparent opacity-50 cursor-not-allowed'
+                                  : 'bg-gray-800 hover:bg-gray-700 border border-transparent'
+                              }`}
+                            >
+                              <div className="flex-shrink-0">
+                                <div className="w-12 h-12 rounded-full bg-teal-500 flex items-center justify-center text-white font-semibold">
+                                  {contact.name
+                                    .split(' ')
+                                    .map(n => n[0])
+                                    .join('')
+                                    .toUpperCase()}
                                 </div>
                               </div>
+                              <div className="ml-4 flex-grow">
+                                <div className="flex justify-between items-start">
+                                  <div>
+                                    <h4 className="font-medium text-white">{contact.name}</h4>
+                                    <p className="text-sm text-gray-400">{contact.email}</p>
+                                  </div>
+                                  <div className="text-right">
+                                    <div className="text-sm text-gray-400">
+                                      {contact.frequency > 0 && (
+                                        <span className="inline-flex items-center px-2 py-1 rounded-full bg-gray-700 text-xs">
+                                          {contact.frequency} recent interactions
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="text-xs text-gray-500 mt-1">
+                                      Last contact: {contact.lastContact 
+                                        ? new Date(contact.lastContact).toLocaleDateString()
+                                        : 'No recent contact'}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="ml-4 flex-shrink-0">
+                                <div className={`w-4 h-4 rounded-full border-2 transition-colors ${
+                                  selectedContacts.has(contact.email) ? 'bg-teal-500 border-teal-500' : 'border-gray-500'
+                                }`} />
+                              </div>
                             </div>
-                            <div className="ml-4 flex-shrink-0">
-                              <div className={`w-4 h-4 rounded-full border-2 transition-colors ${
-                                selectedContacts.has(contact.email) ? 'bg-teal-500 border-teal-500' : 'border-gray-500'
-                              }`} />
-                            </div>
-                          </div>
-                        </button>
-                      ))}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
 
@@ -762,9 +791,9 @@ export default function Dashboard() {
                   <div className="pt-4">
                     <button
                       onClick={createMeetini}
-                      disabled={isProcessing || selectedContacts.size === 0}
+                      disabled={isProcessing || selectedContacts.size === 0 || selectedContacts.size > MAX_PARTICIPANTS}
                       className={`w-full px-6 py-3 bg-teal-500 text-white rounded-lg transition-colors ${
-                        isProcessing || selectedContacts.size === 0 
+                        isProcessing || selectedContacts.size === 0 || selectedContacts.size > MAX_PARTICIPANTS 
                           ? 'opacity-50 cursor-not-allowed' 
                           : 'hover:bg-teal-600'
                       }`}

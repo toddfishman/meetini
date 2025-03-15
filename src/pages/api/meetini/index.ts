@@ -3,6 +3,10 @@ import { getToken } from 'next-auth/jwt';
 import { prisma } from '@/lib/prisma';
 import { sendNotifications } from '@/lib/notifications';
 
+// Constants
+const MAX_PARTICIPANTS = 30;
+const PARTICIPANT_WARNING_THRESHOLD = 20;
+
 interface Contact {
   type: 'email' | 'phone';
   value: string;
@@ -33,7 +37,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     if (req.method === 'POST') {
-      const { title, contacts, location, preferences, proposedTimes } = req.body;
+      const { title, contacts, location, preferences } = req.body;
+      let { proposedTimes } = req.body;
 
       // Log request data for debugging
       console.log('Received request:', {
@@ -48,6 +53,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
       if (!Array.isArray(contacts) || contacts.length === 0) {
         return res.status(400).json({ error: 'At least one contact is required' });
+      }
+      if (contacts.length > MAX_PARTICIPANTS) {
+        return res.status(400).json({ 
+          error: 'Too many participants',
+          details: `Maximum of ${MAX_PARTICIPANTS} participants allowed. You provided ${contacts.length}.`
+        });
       }
       
       // If no proposed times, set default to next hour rounded up
@@ -79,7 +90,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             type: 'sent',
             createdBy: token.email,
             location: location?.trim(),
-            proposedTimes: proposedTimes.map(time => new Date(time)),
+            proposedTimes: proposedTimes.map((time: string) => new Date(time)),
             participants: {
               create: contacts.map(contact => ({
                 email: contact.type === 'email' ? contact.value : null,
