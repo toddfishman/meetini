@@ -69,7 +69,7 @@ export class CalendarService {
         } : undefined
       },
       conferenceDataVersion: options.virtual ? 1 : 0,
-      sendUpdates: 'all'
+      sendUpdates: 'none'  // Changed from 'all' to 'none' to prevent Google from sending emails
     };
 
     try {
