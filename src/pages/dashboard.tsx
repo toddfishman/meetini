@@ -294,7 +294,6 @@ export default function Dashboard() {
     [searchContacts]
   );
 
-  // Handle prompt changes with proper dependencies
   const handlePromptChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const newValue = e.target.value;
     setPrompt(newValue);
