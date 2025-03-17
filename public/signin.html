@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sign In - Meetini</title>
+    <style>
+        :root {
+            --accent: #22c55e;
+            --accent-dark: #16a34a;
+            --text: #f8fafc;
+            --bg: #000000;
+            --card-bg: rgba(255, 255, 255, 0.1);
+            --input-bg: rgba(255, 255, 255, 0.05);
+            --error: #ef4444;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+        }
+
+        body {
+            background-color: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .signin-container {
+            max-width: 400px;
+            width: 90%;
+            padding: 2rem;
+        }
+
+        .logo {
+            width: 200px;
+            margin: 0 auto 2rem;
+            display: block;
+            border-radius: 50%;
+            filter: drop-shadow(0 0 6px rgba(52, 199, 89, 0.2));
+            transition: filter 0.3s ease;
+        }
+
+        .logo:hover {
+            filter: drop-shadow(0 0 8px rgba(52, 199, 89, 0.4));
+        }
+
+        .tabs {
+            display: flex;
+            margin-bottom: 1.5rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .tab {
+            flex: 1;
+            padding: 0.75rem;
+            text-align: center;
+            color: var(--text);
+            cursor: pointer;
+            opacity: 0.7;
+            transition: all 0.2s;
+        }
+
+        .tab.active {
+            opacity: 1;
+            border-bottom: 2px solid var(--accent);
+        }
+
+        .form-group {
+            margin-bottom: 1rem;
+            position: relative;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 0.25rem;
+            color: var(--accent);
+            font-weight: 500;
+            font-size: 0.875rem;
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 0.625rem;
+            border-radius: 0.375rem;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            background: var(--input-bg);
+            color: var(--text);
+            font-size: 0.875rem;
+            transition: all 0.2s;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.2);
+        }
+
+        .form-group .error {
+            position: absolute;
+            bottom: -1.25rem;
+            left: 0;
+            font-size: 0.75rem;
+            color: var(--error);
+        }
+
+        .divider {
+            display: flex;
+            align-items: center;
+            text-align: center;
+            margin: 1.5rem 0;
+            color: rgba(255, 255, 255, 0.5);
+            font-size: 0.875rem;
+        }
+
+        .divider::before,
+        .divider::after {
+            content: '';
+            flex: 1;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .divider span {
+            padding: 0 1rem;
+        }
+
+        .submit-btn {
+            background: var(--accent);
+            color: white;
+            padding: 0.625rem;
+            border-radius: 0.375rem;
+            border: none;
+            font-weight: 600;
+            cursor: pointer;
+            width: 100%;
+            transition: all 0.2s;
+            font-size: 0.875rem;
+        }
+
+        .submit-btn:hover {
+            background: var(--accent-dark);
+        }
+
+        .submit-btn:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+        }
+
+        .google-signin {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: white;
+            color: #333;
+            padding: 0.625rem;
+            border-radius: 0.375rem;
+            border: none;
+            font-weight: 600;
+            cursor: pointer;
+            width: 100%;
+            text-decoration: none;
+            transition: transform 0.2s;
+            font-size: 0.875rem;
+        }
+
+        .google-signin:hover {
+            transform: translateY(-2px);
+        }
+
+        .google-signin img {
+            width: 20px;
+            margin-right: 0.75rem;
+        }
+
+        .back-link {
+            display: block;
+            text-align: center;
+            color: var(--text);
+            text-decoration: none;
+            margin-top: 1rem;
+            opacity: 0.8;
+            transition: opacity 0.2s;
+            font-size: 0.875rem;
+        }
+
+        .back-link:hover {
+            opacity: 1;
+        }
+
+        .form-container {
+            display: none;
+        }
+
+        .form-container.active {
+            display: block;
+        }
+
+        .loading {
+            position: relative;
+            pointer-events: none;
+        }
+
+        .loading::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 1.25rem;
+            height: 1.25rem;
+            margin: -0.625rem 0 0 -0.625rem;
+            border: 2px solid var(--text);
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .scopes-info {
+            font-size: 0.75rem;
+            color: rgba(255, 255, 255, 0.6);
+            margin-top: 1rem;
+            padding: 0.75rem;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 0.375rem;
+        }
+
+        .scopes-info h4 {
+            color: var(--accent);
+            margin-bottom: 0.375rem;
+            font-size: 0.8125rem;
+        }
+
+        .scopes-info ul {
+            list-style: none;
+            margin: 0;
+            padding: 0;
+        }
+
+        .scopes-info li {
+            margin-bottom: 0.25rem;
+            display: flex;
+            align-items: center;
+        }
+
+        .scopes-info li::before {
+            content: '✓';
+            color: var(--accent);
+            margin-right: 0.375rem;
+            font-size: 0.75rem;
+        }
+
+        .note {
+            margin-top: 0.75rem;
+            font-size: 0.75rem;
+            color: rgba(255, 255, 255, 0.6);
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="signin-container">
+        <img src="meetini_martini.jpeg" alt="Meetini" class="logo">
+        
+        <div class="tabs">
+            <div class="tab active" data-form="signin">Sign In</div>
+            <div class="tab" data-form="signup">Create Account</div>
+        </div>
+
+        <div id="signin-form" class="form-container active">
+            <form id="signinForm">
+                <div class="form-group">
+                    <label>Email</label>
+                    <input type="email" required>
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" required>
+                </div>
+                <button type="submit" class="submit-btn">Sign In</button>
+            </form>
+        </div>
+
+        <div id="signup-form" class="form-container">
+            <form id="signupForm">
+                <div class="form-group">
+                    <label>Full Name</label>
+                    <input type="text" required pattern="[A-Za-z ]{2,}" title="Please enter at least 2 characters, letters only">
+                </div>
+                <div class="form-group">
+                    <label>Email</label>
+                    <input type="email" required>
+                </div>
+                <div class="form-group">
+                    <label>Phone Number</label>
+                    <input type="tel" required pattern="[0-9]{10}" title="Please enter a 10-digit phone number">
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="password" required minlength="8" title="Password must be at least 8 characters">
+                </div>
+                <div class="form-group">
+                    <label>Confirm Password</label>
+                    <input type="password" id="confirmPassword" required minlength="8" title="Passwords must match">
+                </div>
+                <button type="submit" class="submit-btn">Create Account</button>
+            </form>
+        </div>
+
+        <div class="divider">
+            <span>or</span>
+        </div>
+
+        <a href="#" class="google-signin" id="googleSignIn">
+            <img src="https://www.google.com/images/branding/googleg/1x/googleg_standard_color_128dp.png" alt="Google" class="w-5 h-5">
+            Continue with Google
+        </a>
+
+        <div class="scopes-info">
+            <h4>Google Integration Features</h4>
+            <ul>
+                <li>Smart calendar scheduling</li>
+                <li>Automatic participant suggestions</li>
+                <li>Professional meeting invites</li>
+            </ul>
+        </div>
+
+        <a href="index.html" class="back-link">← Back to Home</a>
+    </div>
+
+    <script>
+        // Handle hash-based navigation
+        const switchToTab = (tabId) => {
+            // Only allow 'signin' or 'signup' as valid tabs
+            if (tabId !== 'signin' && tabId !== 'signup') {
+                tabId = 'signin'; // Default to signin
+                history.replaceState(null, null, '#signin');
+            }
+
+            const tab = document.querySelector(`.tab[data-form="${tabId}"]`);
+            if (tab) {
+                document.querySelector('.tab.active').classList.remove('active');
+                tab.classList.add('active');
+                
+                document.querySelector('.form-container.active').classList.remove('active');
+                document.getElementById(`${tabId}-form`).classList.add('active');
+            }
+        };
+
+        // Check hash on page load and handle hash changes
+        const handleHash = () => {
+            const hash = window.location.hash.substring(1); // Remove the # symbol
+            switchToTab(hash || 'signin'); // Default to signin if no hash
+        };
+
+        window.addEventListener('load', handleHash);
+        window.addEventListener('hashchange', handleHash);
+
+        // Tab switching functionality
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                // Update URL hash without scrolling
+                history.pushState(null, null, `#${tab.dataset.form}`);
+                switchToTab(tab.dataset.form);
+            });
+        });
+
+        // Form validation and submission
+        const validateForm = (form) => {
+            const inputs = form.querySelectorAll('input');
+            let isValid = true;
+
+            inputs.forEach(input => {
+                // Remove existing error messages
+                const existingError = input.parentElement.querySelector('.error');
+                if (existingError) existingError.remove();
+
+                if (!input.checkValidity()) {
+                    isValid = false;
+                    const error = document.createElement('div');
+                    error.className = 'error';
+                    error.textContent = input.title || input.validationMessage;
+                    input.parentElement.appendChild(error);
+                }
+            });
+
+            // Check password confirmation if this is the signup form
+            if (form.id === 'signupForm') {
+                const password = form.querySelector('#password');
+                const confirmPassword = form.querySelector('#confirmPassword');
+                if (password.value !== confirmPassword.value) {
+                    isValid = false;
+                    const error = document.createElement('div');
+                    error.className = 'error';
+                    error.textContent = 'Passwords do not match';
+                    confirmPassword.parentElement.appendChild(error);
+                }
+            }
+
+            return isValid;
+        };
+
+        // Handle form submissions
+        ['signinForm', 'signupForm'].forEach(formId => {
+            document.getElementById(formId).addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const form = e.target;
+                
+                if (!validateForm(form)) return;
+
+                const submitBtn = form.querySelector('button[type="submit"]');
+                submitBtn.classList.add('loading');
+                submitBtn.disabled = true;
+
+                try {
+                    // For now, redirect to Google OAuth since that's our primary auth method
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    const message = formId === 'signinForm' 
+                        ? 'For security reasons, please use Google Sign In. This ensures we can securely access your calendar and contacts for:\n\n' +
+                          '• Smart meeting scheduling\n' +
+                          '• Automatic participant suggestions\n' +
+                          '• Calendar availability checks\n' +
+                          '• Meeting invite notifications'
+                        : 'To create your account with full calendar and contact integration, please use Google Sign In. This will allow Meetini to:\n\n' +
+                          '• Find the perfect meeting times\n' +
+                          '• Suggest relevant participants\n' +
+                          '• Send professional invites\n' +
+                          '• Manage your availability';
+                    alert(message);
+                    submitBtn.classList.remove('loading');
+                    submitBtn.disabled = false;
+                } catch (error) {
+                    alert('An error occurred. Please try again.');
+                    submitBtn.classList.remove('loading');
+                    submitBtn.disabled = false;
+                }
+            });
+        });
+
+        // Google Sign In handling
+        document.getElementById('googleSignIn').addEventListener('click', async (e) => {
+            e.preventDefault();
+            const button = e.currentTarget;
+            button.classList.add('loading');
+
+            try {
+                // Simulate loading for better UX
+                await new Promise(resolve => setTimeout(resolve, 500));
+                
+                // In a real app, this would go to NextAuth's Google OAuth flow
+                // For demo, show the required scopes and redirect back to home
+                alert('In a real deployment, this would redirect to Google OAuth to request:\n\n' +
+                      '• gmail.modify - For sending meeting invites\n' +
+                      '• gmail.send - For sending notifications\n' +
+                      '• gmail.compose - For drafting emails\n' +
+                      '• calendar - For checking availability\n' +
+                      '• calendar.events - For creating meetings\n' +
+                      '• contacts.readonly - For suggesting participants\n\n' +
+                      'These permissions allow Meetini to provide a seamless scheduling experience.\n\n' +
+                      'Redirecting back to home for demo purposes.');
+                
+                window.location.href = 'index.html';
+            } catch (error) {
+                alert('An error occurred. Please try again.');
+                button.classList.remove('loading');
+            }
+        });
+    </script>
+</body>
+</html>
