@@ -63,13 +63,13 @@ export default function TestEmail() {
       
       <button 
         onClick={sendTestEmail}
-        className="bg-teal-400 text-white px-4 py-2 rounded hover:bg-teal-500 transition-colors"
+        className="bg-[#22c55e] text-white px-4 py-2 rounded hover:bg-[#22c55e]/80 transition-colors"
       >
         Send Test Emails
       </button>
 
       {status && (
-        <p className={`mt-4 ${error ? 'text-red-400' : 'text-teal-400'}`}>
+        <p className={`mt-4 ${error ? 'text-red-400' : 'text-[#22c55e]'}`}>
           {status}
         </p>
       )}

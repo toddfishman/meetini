@@ -121,7 +121,7 @@ export default function MeetingPreferencesForm() {
 
       {/* Location Preferences */}
       <div className="space-y-4">
-        <h3 className="text-lg font-medium text-teal-500">Location Preferences</h3>
+        <h3 className="text-lg font-medium text-[#22c55e]">Location Preferences</h3>
         
         <div>
           <label className="block text-sm font-medium text-gray-300 mb-2">
@@ -145,7 +145,7 @@ export default function MeetingPreferencesForm() {
                 }}
                 className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
                   preferences.locationPreferences.preferredTypes.includes(type.id)
-                    ? 'bg-teal-500 text-white'
+                    ? 'bg-[#22c55e] text-white'
                     : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
                 }`}
               >
@@ -166,7 +166,7 @@ export default function MeetingPreferencesForm() {
                 value={newCustomLocation}
                 onChange={e => setNewCustomLocation(e.target.value)}
                 placeholder="Add a custom location"
-                className="flex-1 p-2 rounded bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-teal-500"
+                className="flex-1 p-2 rounded bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-[#22c55e]"
               />
               <button
                 onClick={() => {
@@ -181,7 +181,7 @@ export default function MeetingPreferencesForm() {
                     setNewCustomLocation('');
                   }
                 }}
-                className="px-4 py-2 bg-teal-500 text-white rounded hover:bg-teal-600 transition-colors"
+                className="px-4 py-2 bg-[#22c55e] text-white rounded hover:bg-[#34d67f] transition-colors"
               >
                 Add
               </button>
@@ -229,14 +229,14 @@ export default function MeetingPreferencesForm() {
                 },
               }));
             }}
-            className="w-full p-2 rounded bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-teal-500"
+            className="w-full p-2 rounded bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-[#22c55e]"
           />
         </div>
       </div>
 
       {/* Virtual Meeting Preferences */}
       <div className="space-y-4">
-        <h3 className="text-lg font-medium text-teal-500">Virtual Meeting Preferences</h3>
+        <h3 className="text-lg font-medium text-[#22c55e]">Virtual Meeting Preferences</h3>
         
         <div>
           <label className="block text-sm font-medium text-gray-300 mb-2">
@@ -260,7 +260,7 @@ export default function MeetingPreferencesForm() {
                 }}
                 className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
                   preferences.virtualMeetings.preferredPlatforms.includes(platform.id)
-                    ? 'bg-teal-500 text-white'
+                    ? 'bg-[#22c55e] text-white'
                     : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
                 }`}
               >
@@ -295,7 +295,7 @@ export default function MeetingPreferencesForm() {
                   }));
                 }}
                 placeholder={`Your ${platform.label} meeting link`}
-                className="w-full p-2 rounded bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-teal-500"
+                className="w-full p-2 rounded bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-[#22c55e]"
               />
             </div>
           ))}
@@ -304,7 +304,7 @@ export default function MeetingPreferencesForm() {
 
       {/* Scheduling Rules */}
       <div className="space-y-4">
-        <h3 className="text-lg font-medium text-teal-500">Scheduling Rules</h3>
+        <h3 className="text-lg font-medium text-[#22c55e]">Scheduling Rules</h3>
         
         <div>
           <label className="block text-sm font-medium text-gray-300 mb-2">
@@ -328,7 +328,7 @@ export default function MeetingPreferencesForm() {
                 }}
                 className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
                   preferences.schedulingRules.preferredTimes[time as keyof typeof preferences.schedulingRules.preferredTimes]
-                    ? 'bg-teal-500 text-white'
+                    ? 'bg-[#22c55e] text-white'
                     : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
                 }`}
               >
@@ -357,7 +357,7 @@ export default function MeetingPreferencesForm() {
                   },
                 }));
               }}
-              className="w-full p-2 rounded bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-teal-500"
+              className="w-full p-2 rounded bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-[#22c55e]"
             />
           </div>
           <div>
@@ -379,7 +379,7 @@ export default function MeetingPreferencesForm() {
                     },
                   }));
                 }}
-                className="w-full p-2 rounded bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-teal-500"
+                className="w-full p-2 rounded bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-[#22c55e]"
               />
               <span className="text-gray-400">to</span>
               <input
@@ -396,7 +396,7 @@ export default function MeetingPreferencesForm() {
                     },
                   }));
                 }}
-                className="w-full p-2 rounded bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-teal-500"
+                className="w-full p-2 rounded bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-[#22c55e]"
               />
             </div>
           </div>
@@ -416,7 +416,7 @@ export default function MeetingPreferencesForm() {
                 value={newKeyword}
                 onChange={e => setNewKeyword(e.target.value)}
                 placeholder="Add a keyword (e.g., 'quick sync', 'team lunch')"
-                className="flex-1 p-2 rounded bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-teal-500"
+                className="flex-1 p-2 rounded bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-[#22c55e]"
               />
               <button
                 onClick={() => {
@@ -437,7 +437,7 @@ export default function MeetingPreferencesForm() {
                     setNewKeyword('');
                   }
                 }}
-                className="px-4 py-2 bg-teal-500 text-white rounded hover:bg-teal-600 transition-colors"
+                className="px-4 py-2 bg-[#22c55e] text-white rounded hover:bg-[#34d67f] transition-colors"
               >
                 Add
               </button>
@@ -448,7 +448,7 @@ export default function MeetingPreferencesForm() {
                 className="p-3 rounded bg-gray-800 border border-gray-700 space-y-2"
               >
                 <div className="flex items-center justify-between">
-                  <span className="text-teal-500 font-medium">{keyword}</span>
+                  <span className="text-[#22c55e] font-medium">{keyword}</span>
                   <button
                     onClick={() => {
                       setPreferences(prev => {
@@ -486,7 +486,7 @@ export default function MeetingPreferencesForm() {
                         },
                       }));
                     }}
-                    className="p-1.5 rounded bg-gray-700 border border-gray-600 text-white text-sm focus:outline-none focus:border-teal-500"
+                    className="p-1.5 rounded bg-gray-700 border border-gray-600 text-white text-sm focus:outline-none focus:border-[#22c55e]"
                   >
                     <option value="30min">30 minutes</option>
                     <option value="1hour">1 hour</option>
@@ -509,7 +509,7 @@ export default function MeetingPreferencesForm() {
                         },
                       }));
                     }}
-                    className="p-1.5 rounded bg-gray-700 border border-gray-600 text-white text-sm focus:outline-none focus:border-teal-500"
+                    className="p-1.5 rounded bg-gray-700 border border-gray-600 text-white text-sm focus:outline-none focus:border-[#22c55e]"
                   >
                     <option value="coffee">Coffee Shop</option>
                     <option value="restaurant">Restaurant</option>
@@ -526,7 +526,7 @@ export default function MeetingPreferencesForm() {
       <div className="flex justify-end pt-4">
         <button
           onClick={savePreferences}
-          className="px-4 py-2 bg-teal-500 text-white rounded hover:bg-teal-600 transition-colors"
+          className="px-4 py-2 bg-[#22c55e] text-white rounded hover:bg-[#34d67f] transition-colors"
         >
           Save Preferences
         </button>

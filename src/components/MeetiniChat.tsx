@@ -208,7 +208,7 @@ export default function MeetiniChat({ isOpen, onClose, onSuccess, initialPrompt 
                   <div
                     className={`max-w-[80%] rounded-lg p-3 ${
                       message.type === 'user'
-                        ? 'bg-teal-500 text-white'
+                        ? 'bg-[#22c55e] text-white'
                         : message.type === 'confirmation'
                         ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100'
                         : 'bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-white'
@@ -225,14 +225,14 @@ export default function MeetiniChat({ isOpen, onClose, onSuccess, initialPrompt 
                               onClick={() => toggleContact(contact)}
                               className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition-colors ${
                                 selectedContacts.some(c => c.email === contact.email)
-                                  ? 'bg-teal-500/20 hover:bg-teal-500/30'
-                                  : 'hover:bg-gray-100 dark:hover:bg-gray-700'
+                                  ? 'bg-[#22c55e]/20 hover:bg-[#22c55e]/30'
+                                  : 'hover:bg-gray-100 dark:hover:bg-gray-800'
                               }`}
                             >
                               <div className="flex items-center space-x-3">
                                 <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ${
                                   selectedContacts.some(c => c.email === contact.email)
-                                    ? 'bg-teal-500 text-white'
+                                    ? 'bg-[#22c55e] text-white'
                                     : 'bg-gray-200 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
                                 }`}>
                                   {getInitials(contact.name)}
@@ -249,7 +249,7 @@ export default function MeetiniChat({ isOpen, onClose, onSuccess, initialPrompt 
                                   </span>
                                 )}
                                 {selectedContacts.some(c => c.email === contact.email) ? (
-                                  <svg className="w-5 h-5 text-teal-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <svg className="w-5 h-5 text-[#22c55e]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                                   </svg>
                                 ) : (
@@ -285,7 +285,7 @@ export default function MeetiniChat({ isOpen, onClose, onSuccess, initialPrompt 
               <button
                 onClick={handleSendMeetini}
                 disabled={isProcessing || selectedContacts.length === 0}
-                className="px-4 py-2 bg-teal-500 text-white rounded-lg hover:bg-teal-600 disabled:opacity-50 whitespace-nowrap"
+                className="px-4 py-2 bg-[#22c55e] text-white rounded-lg hover:bg-[#22c55e]/80 disabled:opacity-50 whitespace-nowrap"
               >
                 {isProcessing ? 'Sending...' : 'Send Meetini'}
               </button>
@@ -295,12 +295,12 @@ export default function MeetiniChat({ isOpen, onClose, onSuccess, initialPrompt 
                 {selectedContacts.map(contact => (
                   <div
                     key={contact.email}
-                    className="inline-flex items-center space-x-1 bg-teal-500/10 text-teal-600 dark:text-teal-400 px-2 py-1 rounded-full text-sm"
+                    className="inline-flex items-center space-x-1 bg-[#22c55e]/10 text-[#22c55e] dark:text-[#22c55e] px-2 py-1 rounded-full text-sm"
                   >
                     <span>{contact.name}</span>
                     <button
                       onClick={() => toggleContact(contact)}
-                      className="hover:text-teal-800 dark:hover:text-teal-200"
+                      className="hover:text-[#22c55e]/80 dark:hover:text-[#22c55e]/80"
                     >
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />

@@ -132,43 +132,68 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const emailService = new EmailService();
 
     // Send creator confirmation with management link
-    await emailService.sendMeetingCreatedConfirmation(meetingDetails);
+    try {
+      await emailService.sendMeetingCreatedConfirmation(meetingDetails);
+    } catch (emailError) {
+      console.error('Failed to send creator confirmation:', emailError);
+      throw new Error(`Failed to send email notification: ${emailError instanceof Error ? emailError.message : 'Unknown email error'}`);
+    }
 
     // Send participant notifications with calendar and Meet links
+    const emailErrors = [];
     for (const participant of invite.participants) {
       if (participant.email === session.user.email) continue;
 
       const isRegistered = registeredEmails.has(participant.email);
       const signupLink = `https://meetini.ai/signup?email=${encodeURIComponent(participant.email)}&invite=${dbInvite.id}`;
 
-      // Add registration prompt for unregistered users
-      if (!isRegistered) {
-        const customHtml = `
-          <div style="margin-top: 20px; padding: 20px; background: #f0f9ff; border-radius: 8px;">
-            <h3 style="color: #0369a1; margin: 0 0 10px 0;">New to Meetini?</h3>
-            <p style="margin: 0 0 15px 0;">
-              Get more out of your meetings by joining Meetini:
-              • Create AI-powered meetings
-              • Manage your availability
-              • Sync with your calendar
-              • Get smart meeting suggestions
-            </p>
-            <a href="${signupLink}" 
-               style="background: #0ea5e9; color: white; padding: 10px 20px; 
-                      text-decoration: none; border-radius: 4px; display: inline-block;">
-              Sign up for Meetini
-            </a>
-          </div>
-        `;
+      try {
+        // Add registration prompt for unregistered users
+        if (!isRegistered) {
+          const customHtml = `
+            <div style="margin-top: 20px; padding: 20px; background: #f0f9ff; border-radius: 8px;">
+              <h3 style="color: #0369a1; margin: 0 0 10px 0;">New to Meetini?</h3>
+              <p style="margin: 0 0 15px 0;">
+                Get more out of your meetings by joining Meetini:
+                • Create AI-powered meetings
+                • Manage your availability
+                • Sync with your calendar
+                • Get smart meeting suggestions
+              </p>
+              <a href="${signupLink}" 
+                 style="background: #0ea5e9; color: white; padding: 10px 20px; 
+                        text-decoration: none; border-radius: 4px; display: inline-block;">
+                Sign up for Meetini
+              </a>
+            </div>
+          `;
 
-        // Add the signup prompt to the email
-        await emailService.sendMeetingConfirmation({
-          ...meetingDetails,
-          additionalHtml: customHtml
-        });
-      } else {
-        await emailService.sendMeetingConfirmation(meetingDetails);
+          // Add the signup prompt to the email
+          await emailService.sendMeetingConfirmation({
+            ...meetingDetails,
+            additionalHtml: customHtml
+          });
+        } else {
+          await emailService.sendMeetingConfirmation(meetingDetails);
+        }
+      } catch (emailError) {
+        console.error(`Failed to send email to ${participant.email}:`, emailError);
+        emailErrors.push({ email: participant.email, error: emailError instanceof Error ? emailError.message : 'Unknown error' });
       }
+    }
+
+    // If any email failed to send, include that in the response
+    if (emailErrors.length > 0) {
+      return res.status(207).json({ 
+        success: true,
+        inviteId: dbInvite.id,
+        eventId: event.id,
+        eventLink: event.htmlLink || '#',
+        meetLink: event.conferenceData?.entryPoints?.[0]?.uri || undefined,
+        registeredParticipants: registeredEmails.size,
+        unregisteredParticipants: invite.participants.length - registeredEmails.size,
+        emailErrors
+      });
     }
 
     return res.status(200).json({ 
@@ -183,9 +208,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   } catch (error) {
     console.error('Error creating Meetini:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    // Check if it's a Resend-specific error
+    if (errorMessage.includes('Failed to send email')) {
+      return res.status(500).json({ 
+        error: errorMessage,
+        details: 'There was an issue sending email notifications. The calendar event was created but emails may not have been sent.'
+      });
+    }
     return res.status(500).json({ 
       error: 'Failed to create Meetini',
-      details: error instanceof Error ? error.message : 'Unknown error'
+      details: errorMessage
     });
   }
 }

@@ -133,17 +133,17 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
       <div 
         key={contact.email}
         className={`flex items-center p-3 rounded-lg cursor-pointer transition-all ${
-          isSelected ? 'bg-teal-100 dark:bg-teal-900' : 'hover:bg-gray-100 dark:hover:bg-gray-800'
+          isSelected ? 'bg-[#22c55e]/50 dark:bg-[#22c55e]/50' : 'hover:bg-gray-100 dark:hover:bg-gray-800'
         }`}
         onClick={() => handleContactToggle(contact)}
       >
         <div className="flex items-center justify-center w-6 h-6 mr-3">
           {isSelected ? (
-            <svg className="w-5 h-5 text-teal-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-5 h-5 text-[#22c55e]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
             </svg>
           ) : (
-            <svg className="w-5 h-5 text-gray-400 hover:text-teal-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-5 h-5 text-gray-400 hover:text-[#22c55e]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
             </svg>
           )}
@@ -203,7 +203,7 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
                 <div className="space-y-2">
                   {selectedContacts.map(contact => (
                     <div key={contact.email} 
-                      className="flex items-center justify-between bg-teal-50 dark:bg-teal-900/50 p-3 rounded-lg"
+                      className="flex items-center justify-between bg-[#22c55e]/50 dark:bg-[#22c55e]/50 p-3 rounded-lg"
                     >
                       <div>
                         <div className="font-medium text-gray-900 dark:text-white">{contact.name}</div>
@@ -237,7 +237,7 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
               <button
                 onClick={handleCreateMeetini}
                 disabled={isSubmitting || !aiPrompt.trim() || selectedContacts.length === 0}
-                className="px-4 py-2 bg-teal-500 text-white rounded-lg hover:bg-teal-600 disabled:opacity-50"
+                className="px-4 py-2 bg-[#22c55e] text-white rounded-lg hover:bg-[#22c55e]/80 disabled:opacity-50"
               >
                 {isSubmitting ? 'Creating...' : 'Create Meetini'}
               </button>
@@ -250,7 +250,7 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
             )}
 
             {processingStatus && (
-              <div className="text-teal-500 text-sm mt-2">
+              <div className="text-[#22c55e] text-sm mt-2">
                 {processingStatus}
               </div>
             )}

@@ -6,7 +6,7 @@ import Navbar from '../components/Navbar';
 import ConfirmationDialog from '../components/ConfirmationDialog';
 import Link from 'next/link';
 import Toast from '../components/Toast';
-import { FaCalendarAlt, FaChevronDown, FaChevronUp, FaCog } from 'react-icons/fa';
+import { FaCalendarAlt, FaChevronDown, FaChevronUp, FaCog, FaMicrophone, FaCalendarPlus } from 'react-icons/fa';
 
 interface CalendarEvent {
   id: string;
@@ -44,9 +44,11 @@ interface Contact {
 
 interface MeetingSummary {
   contacts: Contact[];
+  query: string;
   type?: string;
-  confidence: number;
+  confidence?: number;
   suggestedTimes?: string[];
+  message?: string;
 }
 
 interface ToastProps {
@@ -70,6 +72,7 @@ interface SearchResponse {
     [key: string]: Contact[];
   };
   error?: string;
+  message?: string;
 }
 
 interface SpeechRecognitionResult {
@@ -97,6 +100,11 @@ interface SpeechRecognition extends EventTarget {
   stop(): void;
 }
 
+interface ErrorState {
+  message: string;
+  type?: string;
+}
+
 // Augment the window interface
 declare global {
   var webkitSpeechRecognition: { new(): SpeechRecognition };
@@ -108,7 +116,7 @@ export default function Dashboard() {
   const router = useRouter();
   const [meetiniInvites, setMeetiniInvites] = useState<MeetiniInvite[]>([]);
   const [inviteLoading, setInviteLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ErrorState | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [prompt, setPrompt] = useState('');
   const [isListening, setIsListening] = useState(false);
@@ -135,6 +143,9 @@ export default function Dashboard() {
   const [meetingType, setMeetingType] = useState<{ type: string | undefined; confidence: number }>({ type: undefined, confidence: 0 });
   const [showManualSetup, setShowManualSetup] = useState(false);
   const [activeTab, setActiveTab] = useState<'sent' | 'received'>('received');
+  const [isPendingSearch, setIsPendingSearch] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [transcript, setTranscript] = useState('');
 
   const MAX_PARTICIPANTS = 30;
   const PARTICIPANT_WARNING_THRESHOLD = 20;
@@ -205,105 +216,266 @@ export default function Dashboard() {
       setIsProcessing(true);
       setError(null);
 
+      console.log('Searching contacts with query:', query);
       const response = await fetch(`/api/contacts/search?q=${encodeURIComponent(query)}`);
-      const data = await response.json() as SearchResponse;
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to search contacts');
+      
+      // Handle non-JSON responses first
+      let data: SearchResponse;
+      try {
+        data = await response.json();
+      } catch (e) {
+        console.error('Failed to parse response:', e);
+        throw new Error('Invalid response from server');
       }
 
-      if (data.contacts) {
-        const allContacts = Object.values(data.contacts)
-          .flat()
-          .filter((contact): contact is Contact => 
-            contact !== null &&
-            typeof contact === 'object' &&
-            'email' in contact &&
-            typeof contact.email === 'string' &&
-            'name' in contact &&
-            typeof contact.name === 'string' &&
-            'frequency' in contact &&
-            typeof contact.frequency === 'number'
-          )
-          .sort((a, b) => (b.frequency || 0) - (a.frequency || 0))
-          .filter((contact, index, self) => 
-            index === self.findIndex(c => c.email === contact.email)
-          );
-
-        const detectedType = detectMeetingType(query);
-        
-        setMeetingSummary(prev => {
-          if (prev && 
-              prev.contacts.length === allContacts.length && 
-              prev.contacts.every((c, i) => c.email === allContacts[i].email)) {
-            return prev;
-          }
-          return {
-            contacts: allContacts,
-            type: detectedType.type,
-            confidence: detectedType.confidence,
-            suggestedTimes: prev?.suggestedTimes || []
-          };
+      // Handle API errors
+      if (!response.ok) {
+        console.error('API error:', { 
+          status: response.status, 
+          statusText: response.statusText,
+          data 
         });
+        throw new Error(data.error || data.message || `Server error: ${response.status}`);
+      }
 
-        const highConfidenceContacts = allContacts.filter(contact => contact.confidence >= 0.9);
-        if (highConfidenceContacts.length > 0) {
-          setSelectedContacts(prev => {
-            const newSet = new Set(prev);
-            highConfidenceContacts.forEach(contact => newSet.add(contact.email));
-            return newSet;
-          });
+      // Handle application errors
+      if (data.error) {
+        console.error('Application error:', data);
+        throw new Error(data.error);
+      }
+
+      // Validate response structure
+      if (!data.contacts || typeof data.contacts !== 'object') {
+        console.error('Invalid response format:', data);
+        throw new Error('Invalid response format from contact search');
+      }
+
+      // Process contacts according to our confidence scoring system
+      const allContacts = Object.values(data.contacts)
+        .flat()
+        .filter((contact): contact is Contact => 
+          contact !== null &&
+          typeof contact === 'object' &&
+          'email' in contact &&
+          typeof contact.email === 'string' &&
+          'name' in contact &&
+          typeof contact.name === 'string' &&
+          'confidence' in contact &&
+          typeof contact.confidence === 'number'
+        )
+        .sort((a, b) => b.confidence - a.confidence)
+        .filter((contact, index, self) => 
+          index === self.findIndex(c => c.email === contact.email)
+        );
+
+      if (allContacts.length === 0) {
+        console.log('No contacts found for query:', query);
+        setMeetingSummary(null);
+        return;
+      }
+
+      console.log('Found contacts:', {
+        total: allContacts.length,
+        highConfidence: allContacts.filter(c => c.confidence >= 0.9).length,
+        mediumConfidence: allContacts.filter(c => c.confidence >= 0.85 && c.confidence < 0.9).length,
+        lowConfidence: allContacts.filter(c => c.confidence >= 0.7 && c.confidence < 0.85).length
+      });
+
+      const detectedType = detectMeetingType(query);
+      
+      setMeetingSummary(prev => {
+        if (prev && 
+            prev.contacts.length === allContacts.length && 
+            prev.contacts.every((c, i) => c.email === allContacts[i].email)) {
+          return prev;
         }
+        return {
+          contacts: allContacts,
+          query: query,
+          type: detectedType.type,
+          confidence: detectedType.confidence,
+          suggestedTimes: prev?.suggestedTimes || []
+        };
+      });
+
+      // Auto-select high confidence matches (90% or higher)
+      const highConfidenceContacts = allContacts.filter(contact => contact.confidence >= 0.9);
+      if (highConfidenceContacts.length > 0) {
+        setSelectedContacts(prev => {
+          const newSet = new Set(prev);
+          highConfidenceContacts.forEach(contact => newSet.add(contact.email));
+          return newSet;
+        });
       }
     } catch (error) {
-      console.error('Failed to search contacts:', error);
-      setError(error instanceof Error ? error.message : 'Failed to search contacts');
+      console.error('Contact search error:', error);
+      setError({
+        message: error instanceof Error ? error.message : 'Failed to search contacts',
+        type: 'error'
+      });
+      setMeetingSummary(null);
+      setSelectedContacts(new Set());
     } finally {
       setIsProcessing(false);
     }
-  }, []);
+  }, [isProcessing, detectMeetingType]);
 
   // Memoize the debounced search function
   const debouncedSearchContacts = useMemo(() => 
     debounce((query: string) => {
+      // Only clear everything if the field is completely empty
       if (!query.trim()) {
         setMeetingSummary(null);
         setSelectedContacts(new Set());
         setIsProcessing(false);
+        setIsPendingSearch(false);
         return;
       }
 
+      // Don't trigger search until we have at least 2 characters
+      // But don't clear the previous results either
       if (query.length < 2) {
-        setMeetingSummary(prev => {
-          if (!prev || prev.contacts.length > 0) {
-            return {
-              contacts: [],
-              type: undefined,
-              confidence: 0,
-              suggestedTimes: prev?.suggestedTimes || []
-            };
-          }
-          return prev;
-        });
         setIsProcessing(false);
+        setIsPendingSearch(false);
         return;
       }
 
+      // Now we're actually searching
+      setIsProcessing(true);
+      setIsPendingSearch(false);
       searchContacts(query);
-    }, 500),
+    }, 3000), // 3s debounce
     [searchContacts]
   );
 
   const handlePromptChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const newValue = e.target.value;
     setPrompt(newValue);
+    if (newValue.length >= 2) {
+      setIsPendingSearch(true);
+    } else {
+      setIsPendingSearch(false);
+    }
     debouncedSearchContacts(newValue);
   }, [debouncedSearchContacts]);
 
-  // Start listening with proper dependencies
+  const handleSearch = useCallback(async () => {
+    if (prompt.length < 2 || isProcessing) return;
+    
+    setIsProcessing(true);
+    setError(null);
+    setMeetingSummary(null);
+
+    try {
+      console.log('Manual search triggered for query:', prompt);
+      const response = await fetch(`/api/contacts/search?q=${encodeURIComponent(prompt)}`, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+        }
+      });
+
+      // Handle non-JSON responses first
+      let data: SearchResponse;
+      try {
+        data = await response.json();
+      } catch (e) {
+        console.error('Failed to parse response:', e);
+        throw new Error('Invalid response from server');
+      }
+
+      // Handle API errors
+      if (!response.ok) {
+        console.error('API error:', { 
+          status: response.status, 
+          statusText: response.statusText,
+          data 
+        });
+        throw new Error(data.error || data.message || `Server error: ${response.status}`);
+      }
+
+      // Handle application errors
+      if (data.error) {
+        console.error('Application error:', data);
+        throw new Error(data.error);
+      }
+
+      // Validate response structure
+      if (!data.contacts || typeof data.contacts !== 'object') {
+        console.error('Invalid response format:', data);
+        throw new Error('Invalid response format from contact search');
+      }
+
+      // Process contacts according to our confidence scoring system
+      const allContacts = Object.values(data.contacts)
+        .flat()
+        .filter((contact): contact is Contact => 
+          contact !== null &&
+          typeof contact === 'object' &&
+          'email' in contact &&
+          typeof contact.email === 'string' &&
+          'name' in contact &&
+          typeof contact.name === 'string' &&
+          'confidence' in contact &&
+          typeof contact.confidence === 'number'
+        )
+        .sort((a, b) => b.confidence - a.confidence)
+        .filter((contact, index, self) => 
+          index === self.findIndex(c => c.email === contact.email)
+        );
+
+      if (allContacts.length === 0) {
+        console.log('No contacts found for query:', prompt);
+        setMeetingSummary(null);
+        return;
+      }
+
+      console.log('Found contacts:', {
+        total: allContacts.length,
+        highConfidence: allContacts.filter(c => c.confidence >= 0.9).length,
+        mediumConfidence: allContacts.filter(c => c.confidence >= 0.85 && c.confidence < 0.9).length,
+        lowConfidence: allContacts.filter(c => c.confidence >= 0.7 && c.confidence < 0.85).length
+      });
+
+      const detectedType = detectMeetingType(prompt);
+      
+      setMeetingSummary({
+        contacts: allContacts,
+        query: prompt,
+        type: detectedType.type,
+        confidence: detectedType.confidence,
+        suggestedTimes: [],
+        message: data.message
+      });
+
+      // Auto-select high confidence matches (90% or higher)
+      const highConfidenceContacts = allContacts.filter(contact => contact.confidence >= 0.9);
+      if (highConfidenceContacts.length > 0) {
+        setSelectedContacts(prev => {
+          const newSet = new Set(prev);
+          highConfidenceContacts.forEach(contact => newSet.add(contact.email));
+          return newSet;
+        });
+      }
+    } catch (err) {
+      console.error('Search error:', err);
+      setError({
+        message: err instanceof Error ? err.message : 'Failed to process request',
+        type: 'error'
+      });
+      setMeetingSummary(null);
+      setSelectedContacts(new Set());
+    } finally {
+      setIsProcessing(false);
+    }
+  }, [prompt, isProcessing, detectMeetingType]);
+
   const startListening = useCallback(async () => {
     if (!('webkitSpeechRecognition' in window)) {
-      setError('Speech recognition is not supported in your browser. Please use Chrome.');
+      setError({
+        message: 'Speech recognition is not supported in your browser. Please use Chrome.',
+        type: 'error'
+      });
       return;
     }
 
@@ -325,6 +497,7 @@ export default function Dashboard() {
         
         if (transcript) {
           setPrompt(transcript);
+          setTranscript(transcript);
           debouncedSearchContacts(transcript);
         }
       };
@@ -334,7 +507,10 @@ export default function Dashboard() {
         const error = event as unknown as { error: string };
         if (error.error !== 'no-speech') {
           console.error('Speech recognition error:', event);
-          setError('Failed to recognize speech. Please try again.');
+          setError({
+            message: 'Failed to recognize speech. Please try again.',
+            type: 'error'
+          });
         }
         stopListening();
       };
@@ -348,7 +524,10 @@ export default function Dashboard() {
       setIsListening(true);
       recognition.start();
     } catch (error) {
-      setError('Failed to start voice recognition. Please try again.');
+      setError({
+        message: 'Failed to start voice recognition. Please try again.',
+        type: 'error'
+      });
       setIsListening(false);
     }
   }, [debouncedSearchContacts, stopListening]);
@@ -374,7 +553,10 @@ export default function Dashboard() {
       setMeetiniInvites(data);
     } catch (error) {
       console.error('Failed to fetch invites:', error);
-      setError('Failed to load invitations');
+      setError({
+        message: 'Failed to load invitations',
+        type: 'error'
+      });
     } finally {
       setInviteLoading(false);
     }
@@ -480,7 +662,10 @@ export default function Dashboard() {
         errorMessage = err;
       }
       
-      setError(errorMessage);
+      setError({
+        message: errorMessage,
+        type: 'error'
+      });
       showToast('error', `${errorMessage}. Please try again.`);
     } finally {
       setIsProcessing(false);
@@ -574,7 +759,10 @@ export default function Dashboard() {
         } catch (error) {
           console.error('Failed to update invitation:', error);
           const errorMessage = error instanceof Error ? error.message : 'Failed to update invitation';
-          setError(errorMessage);
+          setError({
+            message: errorMessage,
+            type: 'error'
+          });
           showToast('error', errorMessage);
         }
       }
@@ -625,8 +813,8 @@ export default function Dashboard() {
   // Loading state
   if (status === 'loading') {
     return (
-      <div className="min-h-screen bg-black text-white flex items-center justify-center">
-        <div className="text-teal-500">Loading...</div>
+      <div className="min-h-screen bg-[#1a1d23] text-white flex items-center justify-center">
+        <div className="text-[#22c55e]">Loading...</div>
       </div>
     );
   }
@@ -634,7 +822,7 @@ export default function Dashboard() {
   // Handle session errors
   if (session?.error === 'RefreshAccessTokenError') {
     return (
-      <div className="min-h-screen bg-black text-white flex items-center justify-center">
+      <div className="min-h-screen bg-[#1a1d23] text-white flex items-center justify-center">
         <div className="text-red-500">
           Session expired. Please sign in again.
         </div>
@@ -648,190 +836,258 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="min-h-screen bg-black text-white">
+    <div className="min-h-screen bg-[#1a1d23] text-white">
       <Navbar />
       <div className="max-w-7xl mx-auto px-4 pt-36">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Left Column - Meeting Creation */}
           <div className="lg:col-span-2">
-            <div className="bg-gray-900 p-8 rounded-lg mb-8">
+            <div className="bg-[#2f3336] p-8 rounded-lg mb-8">
               <div className="max-w-3xl">
-                <div className="flex justify-between items-center mb-6">
-                  <h3 className="text-xl font-semibold text-white">Schedule a Meeting</h3>
-                  <Link href="/settings">
-                    <button className="flex items-center space-x-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors text-teal-500">
-                      <FaCog className="w-4 h-4" />
-                      <span>Customize Preferences</span>
-                    </button>
-                  </Link>
-                </div>
-                <p className="text-gray-400 mb-6">Tell me what kind of meeting you want to schedule and with whom.</p>
-                
-                <div className="relative mb-6">
-                  <textarea
-                    value={prompt}
-                    onChange={handlePromptChange}
-                    placeholder="e.g. Schedule a coffee meeting with John tomorrow morning"
-                    className={`w-full p-4 bg-gray-800 text-white rounded-lg mb-2 min-h-[100px] resize-none transition-opacity ${
-                      isProcessing ? 'opacity-50' : 'opacity-100'
-                    }`}
-                    disabled={isProcessing}
-                  />
-                  
-                  <button
-                    onClick={startListening}
-                    className={`absolute top-2 right-2 p-2 rounded-full ${
-                      isListening ? 'bg-red-500' : 'bg-teal-500'
-                    } hover:opacity-80 transition-colors`}
-                    disabled={isProcessing}
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                    </svg>
-                  </button>
+                <div className="flex items-center justify-between mb-6">
+                  <h1 className="text-3xl font-bold text-[#22c55e] tracking-tight">Make A Meetini Happen Here! 🍸</h1>
                 </div>
 
-                {error && (
-                  <div className="mb-4 p-3 bg-red-500/10 border border-red-500 rounded text-red-500">
-                    {error}
+                <div className="mb-6">
+                  <div className="relative ring-1 ring-[#22c55e]/20 rounded-lg bg-[#1a1d23] shadow-lg hover:shadow-[#22c55e]/5 transition-shadow">
+                    <div className="absolute left-4 top-1/2 -translate-y-1/2 z-10">
+                      <button
+                        onClick={isListening ? stopListening : startListening}
+                        className={`p-2 rounded-full transition-colors ${
+                          isListening ? 'text-red-500 animate-pulse' : 'text-[#22c55e] hover:text-[#22c55e]/80'
+                        }`}
+                      >
+                        <FaMicrophone className="w-5 h-5" />
+                      </button>
+                    </div>
+                    <textarea
+                      value={prompt}
+                      onChange={handlePromptChange}
+                      placeholder="Talk or Text: e.g. Schedule a coffee with Joe tomorrow morning"
+                      className={`w-full pl-14 pr-24 py-4 bg-transparent text-gray-100 rounded-lg focus:ring-2 focus:ring-[#22c55e] focus:border-transparent placeholder-gray-500 transition-all duration-200 ${
+                        isProcessing ? 'opacity-50' : 'opacity-100'
+                      } focus:shadow-[0_0_15px_rgba(34,197,94,0.1)]`}
+                      rows={3}
+                      disabled={isProcessing}
+                    />
+                    <div className="absolute right-4 top-1/2 -translate-y-1/2 flex items-center space-x-2">
+                      <button
+                        onClick={() => setPrompt('')}
+                        className={`p-2 text-gray-400 hover:text-white transition-colors ${
+                          !prompt ? 'opacity-0' : 'opacity-100'
+                        }`}
+                        disabled={!prompt || isProcessing}
+                      >
+                        Clear
+                      </button>
+                      <button
+                        onClick={handleSearch}
+                        disabled={!prompt || isProcessing}
+                        className={`px-4 py-2 bg-[#22c55e] text-white rounded-lg transition-colors ${
+                          !prompt || isProcessing
+                            ? 'opacity-50 cursor-not-allowed'
+                            : 'hover:bg-[#22c55e]/80'
+                        }`}
+                      >
+                        {isProcessing ? 'Processing...' : 'Search'}
+                      </button>
+                    </div>
                   </div>
-                )}
+                  {transcript && (
+                    <p className="mt-2 text-sm text-gray-400">
+                      Heard: {transcript}
+                    </p>
+                  )}
+                  {error && (
+                    <div className="mt-4 p-3 bg-red-500/10 border border-red-500/20 rounded-lg">
+                      <div className="flex items-center text-red-400">
+                        <span className="text-sm">
+                          {error.message}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Manual Setup Section */}
+                <div className="mb-8 p-6 bg-[#1a1d23] rounded-lg border border-[#2f3336]">
+                  <h3 className="text-xl font-semibold text-[#22c55e] mb-4">Manual Setup for Meetini</h3>
+                  <div className="relative flex items-center">
+                    <button
+                      onClick={() => {/* TODO: Implement manual setup */}}
+                      className="absolute left-4 text-[#22c55e] hover:text-[#22c55e]/80 transition-colors"
+                      aria-label="Open manual setup"
+                    >
+                      <FaCalendarPlus className="w-5 h-5" />
+                    </button>
+                    <input
+                      type="text"
+                      placeholder="Click the calendar icon to manually set up a Meetini"
+                      className="w-full pl-12 pr-4 py-3 bg-[#2f3336] border border-[#2f3336] rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent cursor-pointer"
+                      readOnly
+                      onClick={() => {/* TODO: Implement manual setup */}}
+                    />
+                  </div>
+                </div>
 
                 {meetingSummary && (
-                  <div className="mb-6 p-4 bg-gray-800 rounded-lg">
-                    <h4 className="text-sm font-medium text-gray-400 mb-3">Meeting Summary</h4>
-                    <div className="space-y-4">
-                      {/* Organizer */}
-                      <div className="space-y-2">
-                        <h5 className="text-xs font-medium text-gray-500">ORGANIZER</h5>
-                        <div className="p-4 bg-gray-700/50 rounded-lg">
-                          <div className="flex items-center">
-                            <div className="w-10 h-10 rounded-full bg-teal-500 flex items-center justify-center text-white font-semibold">
-                              {session?.user?.name?.[0] || session?.user?.email?.[0] || '?'}
-                            </div>
-                            <div className="ml-3">
-                              <div className="font-medium">{session?.user?.name || 'You'}</div>
-                              <div className="text-sm text-gray-400">{session?.user?.email}</div>
-                            </div>
-                            <div className="ml-auto">
-                              <span className="px-2 py-1 text-xs bg-teal-500/20 text-teal-500 rounded-full">
-                                Organizer
-                              </span>
-                            </div>
-                          </div>
-                        </div>
+                  <div className="mt-6 space-y-4">
+                    {meetingSummary.message && (
+                      <div className="text-sm text-gray-400">
+                        {meetingSummary.message}
                       </div>
-
-                      {/* Selected Participants */}
-                      <div className="space-y-2">
-                        <div className="flex justify-between items-center">
-                          <h5 className="text-xs font-medium text-gray-500">SELECTED PARTICIPANTS</h5>
-                          <span className="text-xs text-gray-500">
-                            {selectedContacts.size}/{MAX_PARTICIPANTS - 1} max
-                          </span>
-                        </div>
-                        {selectedContacts.size > 0 ? (
-                          <div className="space-y-2">
-                            {Array.from(selectedContacts).map(email => {
-                              const contact = meetingSummary.contacts.find(c => c.email === email);
-                              return (
-                                <div key={email} className="p-4 bg-gray-700/50 rounded-lg">
-                                  <div className="flex items-center">
-                                    <div className="w-10 h-10 rounded-full bg-gray-600 flex items-center justify-center text-white font-semibold">
-                                      {contact?.name?.[0] || email[0]}
-                                    </div>
-                                    <div className="ml-3">
-                                      <div className="font-medium">{contact?.name || email}</div>
-                                      <div className="text-sm text-gray-400">{email}</div>
-                                    </div>
-                                    <button
-                                      onClick={() => toggleContactSelection(email)}
-                                      className="ml-auto text-gray-400 hover:text-red-500"
-                                    >
-                                      Remove
-                                    </button>
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        ) : (
-                          <div className="text-center p-4 bg-gray-700/50 rounded-lg text-gray-400">
-                            No participants selected
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Suggested Participants */}
-                      <div className="space-y-2">
-                        <h5 className="text-xs font-medium text-gray-500">SUGGESTED PARTICIPANTS</h5>
+                    )}
+                    <div className="bg-[#2f3336] rounded-lg p-4">
+                      <h4 className="text-sm font-medium text-gray-400 mb-3">Meeting Summary</h4>
+                      <div className="space-y-4">
+                        {/* Organizer */}
                         <div className="space-y-2">
-                          {meetingSummary.contacts
-                            .filter(contact => !selectedContacts.has(contact.email))
-                            .map(contact => (
-                              <button
-                                key={contact.email}
-                                onClick={() => toggleContactSelection(contact.email)}
-                                disabled={selectedContacts.size >= MAX_PARTICIPANTS - 1}
-                                className={`w-full p-4 bg-gray-700/50 rounded-lg transition-colors ${
-                                  selectedContacts.size >= MAX_PARTICIPANTS - 1
-                                    ? 'opacity-50 cursor-not-allowed'
-                                    : 'hover:bg-gray-600/50'
-                                }`}
-                              >
-                                <div className="flex items-center">
-                                  <div className="w-10 h-10 rounded-full bg-gray-600 flex items-center justify-center text-white font-semibold">
-                                    {contact.name[0]}
-                                  </div>
-                                  <div className="ml-3 text-left">
-                                    <div className="font-medium">{contact.name}</div>
-                                    <div className="text-sm text-gray-400">{contact.email}</div>
-                                  </div>
-                                  <div className="ml-auto">
-                                    <span className="px-2 py-1 text-xs bg-gray-600 rounded-full">
-                                      {Math.round(contact.confidence * 100)}% match
-                                    </span>
-                                  </div>
-                                </div>
-                              </button>
-                            ))}
+                          <h5 className="text-xs font-medium text-gray-500">ORGANIZER</h5>
+                          <div className="p-4 bg-[#2f3336]/50 rounded-lg">
+                            <div className="flex items-center">
+                              <div className="w-10 h-10 rounded-full bg-[#22c55e] flex items-center justify-center text-white font-semibold">
+                                {session?.user?.name?.[0] || session?.user?.email?.[0] || '?'}
+                              </div>
+                              <div className="ml-3">
+                                <div className="font-medium">{session?.user?.name || 'You'}</div>
+                                <div className="text-sm text-gray-400">{session?.user?.email}</div>
+                              </div>
+                              <div className="ml-auto">
+                                <span className="px-2 py-1 text-xs bg-[#22c55e]/20 text-[#22c55e] rounded-full">
+                                  Organizer
+                                </span>
+                              </div>
+                            </div>
+                          </div>
                         </div>
-                      </div>
 
-                      {/* Create Meeting Button */}
-                      <div className="pt-4">
-                        <button
-                          onClick={createMeetini}
-                          disabled={isProcessing || selectedContacts.size === 0}
-                          className={`w-full py-3 px-4 rounded-lg font-medium transition-colors ${
-                            isProcessing || selectedContacts.size === 0
-                              ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
-                              : 'bg-teal-500 hover:bg-teal-600 text-white'
-                          }`}
-                        >
-                          {isProcessing ? 'Creating...' : 'Create Meeting'}
-                        </button>
+                        {/* Selected Participants */}
+                        <div className="space-y-2">
+                          <div className="flex justify-between items-center">
+                            <h5 className="text-xs font-medium text-gray-500">SELECTED PARTICIPANTS</h5>
+                            <span className="text-xs text-gray-500">
+                              {selectedContacts.size}/{MAX_PARTICIPANTS - 1} max
+                            </span>
+                          </div>
+                          <div className="space-y-2">
+                            {selectedContacts.size > 0 ? (
+                              Array.from(selectedContacts).map(email => {
+                                const contact = meetingSummary.contacts.find(c => c.email === email);
+                                return (
+                                  <div key={email} className="p-4 bg-[#2f3336]/50 rounded-lg">
+                                    <div className="flex items-center">
+                                      <div className="w-10 h-10 rounded-full bg-gray-600 flex items-center justify-center text-white font-semibold">
+                                        {contact?.name?.[0] || email[0]}
+                                      </div>
+                                      <div className="ml-3">
+                                        <div className="font-medium">{contact?.name || email}</div>
+                                        <div className="text-sm text-gray-400">{email}</div>
+                                      </div>
+                                      <button
+                                        onClick={() => toggleContactSelection(email)}
+                                        className="ml-auto text-gray-400 hover:text-red-500 transition-colors"
+                                      >
+                                        Remove
+                                      </button>
+                                    </div>
+                                  </div>
+                                );
+                              })
+                            ) : (
+                              <div className="text-center p-4 bg-[#2f3336]/50 rounded-lg text-gray-400">
+                                No participants selected
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Suggested Participants */}
+                        <div className="space-y-2">
+                          <h5 className="text-xs font-medium text-gray-500">SUGGESTED PARTICIPANTS</h5>
+                          <div className="space-y-2">
+                            {meetingSummary.contacts
+                              .filter(contact => !selectedContacts.has(contact.email))
+                              .sort((a, b) => b.confidence - a.confidence) // Sort by confidence
+                              .map((contact, index) => (
+                                <button
+                                  key={`${contact.email}-${index}`}
+                                  onClick={() => toggleContactSelection(contact.email)}
+                                  disabled={selectedContacts.size >= MAX_PARTICIPANTS - 1}
+                                  className={`w-full p-3 flex items-center justify-between bg-[#1a1d23] rounded hover:bg-[#1a1d23]/80 transition-colors ${
+                                    selectedContacts.size >= MAX_PARTICIPANTS - 1
+                                      ? 'opacity-50 cursor-not-allowed'
+                                      : ''
+                                  }`}
+                                >
+                                  <div className="flex items-center space-x-3">
+                                    <div className="w-8 h-8 rounded-full bg-[#22c55e] flex items-center justify-center">
+                                      <span className="text-white text-sm font-medium">
+                                        {contact.name.charAt(0).toUpperCase()}
+                                      </span>
+                                    </div>
+                                    <div className="text-left">
+                                      <div className="text-sm font-medium text-white">{contact.name}</div>
+                                      <div className="text-xs text-gray-400">{contact.email}</div>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center space-x-2">
+                                    <div className="text-xs text-gray-400">
+                                      Confidence: {Math.round(contact.confidence * 100)}%
+                                    </div>
+                                    {contact.confidence >= 0.9 && (
+                                      <span className="px-2 py-1 text-xs bg-[#22c55e]/20 text-[#22c55e] rounded-full">
+                                        Best Match
+                                      </span>
+                                    )}
+                                  </div>
+                                </button>
+                              ))}
+                          </div>
+                        </div>
+
+                        {/* Create Meeting Button */}
+                        <div className="pt-4">
+                          <button
+                            onClick={createMeetini}
+                            disabled={isProcessing || selectedContacts.size === 0}
+                            className={`w-full py-3 px-4 rounded-lg font-medium transition-colors ${
+                              isProcessing || selectedContacts.size === 0
+                                ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
+                                : 'bg-[#22c55e] hover:bg-[#22c55e]/80 text-white'
+                            }`}
+                          >
+                            {isProcessing ? 'Creating...' : 'Create Meeting'}
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
                 )}
               </div>
             </div>
-
           </div>
 
           {/* Right Column - Calendar and Invitations */}
           <div className="lg:col-span-1 space-y-8">
             {/* Calendar Section */}
-            <div className="bg-gray-900 p-6 rounded-lg sticky top-24">
+            <div className="bg-[#2f3336] p-6 rounded-lg sticky top-24">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium text-white">Your Calendar</h3>
+                <h2 className="text-xl font-bold text-[#22c55e] tracking-tight">Your Calendar</h2>
                 <button
                   onClick={() => setShowCalendar(!showCalendar)}
-                  className="flex items-center space-x-2 text-teal-500 hover:text-teal-400 transition-colors"
+                  className="flex items-center space-x-2 text-[#22c55e] hover:text-[#22c55e]/80 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:ring-opacity-50 rounded-lg px-3 py-1.5"
                 >
-                  <FaCalendarAlt className="w-4 h-4" />
-                  {showCalendar ? <FaChevronUp className="w-3 h-3" /> : <FaChevronDown className="w-3 h-3" />}
+                  {showCalendar ? (
+                    <>
+                      <span className="font-medium">Hide Calendar</span>
+                      <FaChevronUp className="w-4 h-4" />
+                    </>
+                  ) : (
+                    <>
+                      <span className="font-medium">Show Calendar</span>
+                      <FaChevronDown className="w-4 h-4" />
+                    </>
+                  )}
                 </button>
               </div>
               
@@ -852,16 +1108,16 @@ export default function Dashboard() {
             </div>
 
             {/* Invitations Section */}
-            <div className="bg-gray-900 p-6 rounded-lg">
-              <h3 className="text-lg font-medium text-white mb-6">Your Invitations</h3>
+            <div className="bg-[#2f3336] p-6 rounded-lg">
+              <h2 className="text-xl font-bold text-[#22c55e] tracking-tight mb-4">Your Meetini's</h2>
               
               <div className="flex space-x-4 mb-6">
                 <button
                   onClick={() => setActiveTab('received')}
                   className={`px-4 py-2 rounded-lg transition-colors ${
                     activeTab === 'received'
-                      ? 'bg-teal-500 text-white'
-                      : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                      ? 'bg-[#22c55e] text-white'
+                      : 'bg-[#2f3336] text-gray-400 hover:bg-[#2f3336]/80'
                   }`}
                 >
                   Received
@@ -870,8 +1126,8 @@ export default function Dashboard() {
                   onClick={() => setActiveTab('sent')}
                   className={`px-4 py-2 rounded-lg transition-colors ${
                     activeTab === 'sent'
-                      ? 'bg-teal-500 text-white'
-                      : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                      ? 'bg-[#22c55e] text-white'
+                      : 'bg-[#2f3336] text-gray-400 hover:bg-[#2f3336]/80'
                   }`}
                 >
                   Sent
@@ -880,12 +1136,12 @@ export default function Dashboard() {
 
               {inviteLoading ? (
                 <div className="text-center py-8">
-                  <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-teal-500 mx-auto"></div>
+                  <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-[#22c55e] mx-auto"></div>
                 </div>
               ) : filteredInvites.length > 0 ? (
                 <div className="space-y-4">
                   {filteredInvites.map((invite) => (
-                    <div key={invite.id} className="p-4 bg-gray-800 rounded-lg">
+                    <div key={invite.id} className="p-4 bg-[#2f3336] rounded-lg">
                       <div className="flex justify-between items-start">
                         <div>
                           <h4 className="font-medium text-white">{invite.title}</h4>
@@ -913,7 +1169,7 @@ export default function Dashboard() {
                         <div className="mt-4 flex space-x-2">
                           <button
                             onClick={() => handleInviteAction(invite.id, 'accept')}
-                            className="px-3 py-1 bg-teal-500 text-white rounded hover:bg-teal-600 transition-colors"
+                            className="px-3 py-1 bg-[#22c55e] text-white rounded hover:bg-[#22c55e]/80 transition-colors"
                           >
                             Accept
                           </button>
@@ -947,9 +1203,6 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
-
-      <ConfirmationDialog {...confirmDialog} />
-      <Toast {...toast} />
     </div>
   );
 }

@@ -129,7 +129,7 @@ export default function CalendarSettings() {
   if (isLoading) {
     return (
       <div className="p-4">
-        <div className="animate-pulse text-teal-500">Loading calendar settings...</div>
+        <div className="animate-pulse text-[#22c55e]">Loading calendar settings...</div>
       </div>
     );
   }
@@ -144,7 +144,7 @@ export default function CalendarSettings() {
 
       {/* Calendar Connections */}
       <div>
-        <h3 className="text-lg font-medium text-teal-500 mb-4">Connected Calendars</h3>
+        <h3 className="text-lg font-medium text-[#22c55e] mb-4">Connected Calendars</h3>
         <div className="space-y-3">
           {['google', 'outlook', 'apple'].map(provider => {
             const isConnected = accounts.some(account => account.provider === provider);
@@ -164,7 +164,7 @@ export default function CalendarSettings() {
                   className={`px-4 py-2 rounded text-sm font-medium ${
                     isConnected
                       ? 'bg-red-500/10 text-red-500 hover:bg-red-500/20'
-                      : 'bg-teal-500 text-white hover:bg-teal-600'
+                      : 'bg-[#22c55e] text-white hover:bg-[#22c55e]/80'
                   } transition-colors`}
                 >
                   {isConnected ? 'Disconnect' : 'Connect'}
@@ -177,7 +177,7 @@ export default function CalendarSettings() {
 
       {/* Working Hours */}
       <div>
-        <h3 className="text-lg font-medium text-teal-500 mb-4">Working Hours</h3>
+        <h3 className="text-lg font-medium text-[#22c55e] mb-4">Working Hours</h3>
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-1">
@@ -192,7 +192,7 @@ export default function CalendarSettings() {
                   end: preferences.workingHours?.end || '17:00',
                 },
               })}
-              className="w-full p-2 rounded bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-teal-500"
+              className="w-full p-2 rounded bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-[#22c55e]"
             />
           </div>
           <div>
@@ -208,7 +208,7 @@ export default function CalendarSettings() {
                   end: e.target.value,
                 },
               })}
-              className="w-full p-2 rounded bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-teal-500"
+              className="w-full p-2 rounded bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-[#22c55e]"
             />
           </div>
         </div>
@@ -216,7 +216,7 @@ export default function CalendarSettings() {
 
       {/* Work Days */}
       <div>
-        <h3 className="text-lg font-medium text-teal-500 mb-4">Work Days</h3>
+        <h3 className="text-lg font-medium text-[#22c55e] mb-4">Work Days</h3>
         <div className="flex flex-wrap gap-2">
           {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, index) => (
             <button
@@ -229,7 +229,7 @@ export default function CalendarSettings() {
               }}
               className={`px-4 py-2 rounded text-sm font-medium ${
                 preferences.workDays.includes(index)
-                  ? 'bg-teal-500 text-white'
+                  ? 'bg-[#22c55e] text-white'
                   : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
               } transition-colors`}
             >
@@ -241,11 +241,11 @@ export default function CalendarSettings() {
 
       {/* Timezone */}
       <div>
-        <h3 className="text-lg font-medium text-teal-500 mb-4">Timezone</h3>
+        <h3 className="text-lg font-medium text-[#22c55e] mb-4">Timezone</h3>
         <select
           value={preferences.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone}
           onChange={e => handleUpdatePreferences({ timezone: e.target.value })}
-          className="w-full p-2 rounded bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-teal-500"
+          className="w-full p-2 rounded bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-[#22c55e]"
         >
           {Intl.supportedValuesOf('timeZone').map(tz => (
             <option key={tz} value={tz}>{tz}</option>

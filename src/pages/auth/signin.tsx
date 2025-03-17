@@ -35,7 +35,7 @@ export default function SignIn() {
   if (status === 'loading') {
     return (
       <div className="min-h-screen bg-black text-white flex items-center justify-center">
-        <div className="text-teal-500">Loading...</div>
+        <div className="text-[#22c55e]">Loading...</div>
       </div>
     );
   }
@@ -89,7 +89,7 @@ export default function SignIn() {
         <div className="mt-8">
           <button
             onClick={handleSignIn}
-            className="group relative w-full flex justify-center py-3 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-teal-600 hover:bg-teal-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-teal-500"
+            className="group relative w-full flex justify-center py-3 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-[#22c55e] hover:bg-[#22c55e]/80 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#22c55e]"
           >
             Continue with Google
           </button>

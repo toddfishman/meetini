@@ -6,6 +6,7 @@ import { useRouter } from 'next/router';
 import { handleBiometricAuth, isBiometricsAvailable } from '@/lib/biometrics';
 import FaceIDSetup from './FaceIDSetup';
 import Toast, { ToastType } from './Toast';
+import { FaTimes, FaBars } from 'react-icons/fa';
 
 export default function Navbar() {
   const { data: session } = useSession();
@@ -50,68 +51,79 @@ export default function Navbar() {
     <nav className="fixed top-0 left-0 right-0 z-50 bg-black/80 backdrop-blur-sm">
       <div className="max-w-6xl mx-auto px-4">
         <div className="flex justify-between items-center h-20">
-          <div className="flex items-center">
-            <Link href="/" className="flex items-center">
-              <Image
-                src="/logos/beta-logo.png"
-                alt="Meetini"
-                width={200}
-                height={200}
-                className="w-auto h-auto"
-                priority
-              />
-            </Link>
-          </div>
-
-          <div className="flex items-center">
-            {session ? (
-              <div className="flex flex-col items-end pt-8">
-                <button
-                  onClick={() => setIsMenuOpen(!isMenuOpen)}
-                  className="text-white hover:text-teal-500 transition-colors mb-3"
-                >
-                  <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-                  </svg>
-                </button>
-
-                <button
-                  onClick={() => signOut()}
-                  className="text-sm text-gray-300 hover:text-white mb-2"
-                >
-                  Sign Out
-                </button>
-
-                {session?.user?.email && (
-                  <p className="text-sm text-gray-400">Logged in as: {session.user.email}</p>
-                )}
-
-                {/* Dropdown Menu */}
-                {isMenuOpen && (
-                  <div className="absolute right-0 top-24 mt-2 w-48 bg-gray-900 rounded-lg shadow-lg py-2 z-50">
-                    <Link href="/dashboard">
-                      <span className="block px-4 py-2 text-white hover:bg-gray-800 cursor-pointer">
-                        Dashboard
-                      </span>
-                    </Link>
-                    <Link href="/settings">
-                      <span className="block px-4 py-2 text-white hover:bg-gray-800 cursor-pointer">
-                        Meeting Preferences
-                      </span>
-                    </Link>
-                  </div>
-                )}
+          <div className="flex items-center justify-between w-full">
+            <Link href="/dashboard" className="flex items-center">
+              <div className="relative">
+                <Image
+                  src="/images/meetini_martini.jpeg"
+                  alt="Meetini Logo"
+                  width={140}
+                  height={140}
+                  className="rounded-full shadow-lg hover:shadow-[#22c55e]/10 transition-shadow duration-200"
+                  priority
+                />
               </div>
-            ) : (
-              <Link
-                href="/api/auth/signin"
-                className="text-sm text-gray-300 hover:text-white"
+            </Link>
+
+            {/* Right side menu for larger screens */}
+            <div className="hidden md:flex items-center space-x-4">
+              {session?.user?.email && (
+                <span className="text-sm text-gray-400">
+                  {session.user.email}
+                </span>
+              )}
+              <button
+                onClick={() => signOut()}
+                className="px-4 py-2 text-[#22c55e] hover:text-[#22c55e]/80 transition-colors"
               >
-                Sign In
-              </Link>
-            )}
+                Sign out
+              </button>
+            </div>
+
+            {/* Mobile menu button */}
+            <div className="md:hidden">
+              <button
+                onClick={() => setIsMenuOpen(!isMenuOpen)}
+                className="inline-flex items-center justify-center p-2 rounded-md text-[#22c55e] hover:text-[#22c55e]/80 hover:bg-[#1a1d23] transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:ring-opacity-50"
+                aria-expanded={isMenuOpen}
+              >
+                <span className="sr-only">Open main menu</span>
+                {isMenuOpen ? (
+                  <FaTimes className="w-6 h-6" aria-hidden="true" />
+                ) : (
+                  <FaBars className="w-6 h-6" aria-hidden="true" />
+                )}
+              </button>
+            </div>
           </div>
         </div>
+
+        {isMenuOpen && (
+          <div className="absolute right-0 top-full mt-2 w-48 rounded-md shadow-lg bg-[#1a1d23] ring-1 ring-[#22c55e]/20 divide-y divide-gray-700">
+            <div className="py-1">
+              <Link
+                href="/dashboard"
+                className="block px-4 py-2 text-sm text-[#22c55e] hover:bg-[#2f3336] transition-colors"
+              >
+                Dashboard
+              </Link>
+              <Link
+                href="/settings"
+                className="block px-4 py-2 text-sm text-[#22c55e] hover:bg-[#2f3336] transition-colors"
+              >
+                Settings
+              </Link>
+            </div>
+            <div className="py-1">
+              <button
+                onClick={() => signOut()}
+                className="block w-full text-left px-4 py-2 text-sm text-[#22c55e] hover:bg-[#2f3336] transition-colors"
+              >
+                Sign out
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       <FaceIDSetup

@@ -150,7 +150,7 @@ export default function GroupManager() {
   if (isLoading) {
     return (
       <div className="p-4">
-        <div className="animate-pulse text-teal-500">Loading groups...</div>
+        <div className="animate-pulse text-[#22c55e]">Loading groups...</div>
       </div>
     );
   }
@@ -160,10 +160,10 @@ export default function GroupManager() {
       {/* Groups List */}
       <div className="col-span-1 space-y-4">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-medium text-teal-500">Groups</h3>
+          <h3 className="text-lg font-medium text-[#22c55e]">Groups</h3>
           <button
             onClick={() => setIsCreating(true)}
-            className="px-3 py-1 rounded text-sm font-medium bg-teal-500 text-white hover:bg-teal-600 transition-colors"
+            className="px-3 py-1 rounded text-sm font-medium bg-[#22c55e] text-white hover:bg-[#22c55e]/80 transition-colors"
           >
             New Group
           </button>
@@ -176,7 +176,7 @@ export default function GroupManager() {
               onClick={() => setSelectedGroup(group)}
               className={`w-full p-3 rounded text-left ${
                 selectedGroup?.id === group.id
-                  ? 'bg-teal-500 text-white'
+                  ? 'bg-[#22c55e] text-white'
                   : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
               } transition-colors`}
             >
@@ -202,7 +202,7 @@ export default function GroupManager() {
 
         {isCreating ? (
           <div className="space-y-4">
-            <h3 className="text-lg font-medium text-teal-500">Create New Group</h3>
+            <h3 className="text-lg font-medium text-[#22c55e]">Create New Group</h3>
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-1">
                 Group Name
@@ -211,7 +211,7 @@ export default function GroupManager() {
                 type="text"
                 value={newGroup.name}
                 onChange={e => setNewGroup({ ...newGroup, name: e.target.value })}
-                className="w-full p-2 rounded bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-teal-500"
+                className="w-full p-2 rounded bg-[#2f3336] border border-[#2f3336] text-white focus:outline-none focus:border-[#22c55e]"
                 placeholder="Enter group name"
               />
             </div>
@@ -222,7 +222,7 @@ export default function GroupManager() {
               <textarea
                 value={newGroup.description}
                 onChange={e => setNewGroup({ ...newGroup, description: e.target.value })}
-                className="w-full p-2 rounded bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-teal-500"
+                className="w-full p-2 rounded bg-[#2f3336] border border-[#2f3336] text-white focus:outline-none focus:border-[#22c55e]"
                 placeholder="Enter group description"
                 rows={3}
               />
@@ -239,7 +239,7 @@ export default function GroupManager() {
               </button>
               <button
                 onClick={handleCreateGroup}
-                className="px-4 py-2 rounded text-sm font-medium bg-teal-500 text-white hover:bg-teal-600 transition-colors"
+                className="px-4 py-2 rounded text-sm font-medium bg-[#22c55e] text-white hover:bg-[#22c55e]/80 transition-colors"
               >
                 Create Group
               </button>
@@ -248,7 +248,7 @@ export default function GroupManager() {
         ) : selectedGroup ? (
           <div className="space-y-6">
             <div className="flex items-center justify-between">
-              <h3 className="text-lg font-medium text-teal-500">{selectedGroup.name}</h3>
+              <h3 className="text-lg font-medium text-[#22c55e]">{selectedGroup.name}</h3>
               <button
                 onClick={() => handleDeleteGroup(selectedGroup.id)}
                 className="px-3 py-1 rounded text-sm font-medium bg-red-500/10 text-red-500 hover:bg-red-500/20 transition-colors"

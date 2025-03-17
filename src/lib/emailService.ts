@@ -23,14 +23,25 @@ export class EmailService {
   private fromEmail: string;
 
   constructor() {
+    const missingVars = [];
     if (!process.env.RESEND_API_KEY) {
-      throw new Error('RESEND_API_KEY is not configured');
+      missingVars.push('RESEND_API_KEY');
     }
     if (!process.env.RESEND_FROM_EMAIL) {
-      throw new Error('RESEND_FROM_EMAIL is not configured');
+      missingVars.push('RESEND_FROM_EMAIL');
     }
+    
+    if (missingVars.length > 0) {
+      const errorMessage = `Missing required environment variables: ${missingVars.join(', ')}. Please set these in your .env file or environment.`;
+      console.error(errorMessage);
+      throw new Error(errorMessage);
+    }
+
     this.resend = new Resend(process.env.RESEND_API_KEY);
     this.fromEmail = process.env.RESEND_FROM_EMAIL;
+    
+    // Log initialization but not the actual values
+    console.log('EmailService initialized with Resend configuration');
   }
 
   private formatParticipantNames(participants: string[]): string {

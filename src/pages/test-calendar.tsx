@@ -75,7 +75,7 @@ export default function TestCalendar() {
           
           <button 
             onClick={createTestEvent}
-            className="bg-teal-500 hover:bg-teal-600 text-white font-medium py-2 px-4 rounded-md transition-colors"
+            className="bg-[#22c55e] hover:bg-[#22c55e]/80 text-white font-medium py-2 px-4 rounded-md transition-colors"
           >
             Create Test Event
           </button>
@@ -92,9 +92,9 @@ export default function TestCalendar() {
             <p className="font-medium">{status}</p>
             {eventDetails && (
               <div className="mt-4 space-y-2">
-                <p>Event Link: <a href={eventDetails.htmlLink} target="_blank" rel="noopener noreferrer" className="text-teal-600 hover:text-teal-700">View in Calendar</a></p>
+                <p>Event Link: <a href={eventDetails.htmlLink} target="_blank" rel="noopener noreferrer" className="text-[#22c55e] hover:text-[#22c55e]/80">View in Calendar</a></p>
                 {eventDetails.meetLink && (
-                  <p>Meet Link: <a href={eventDetails.meetLink} target="_blank" rel="noopener noreferrer" className="text-teal-600 hover:text-teal-700">Join Meeting</a></p>
+                  <p>Meet Link: <a href={eventDetails.meetLink} target="_blank" rel="noopener noreferrer" className="text-[#22c55e] hover:text-[#22c55e]/80">Join Meeting</a></p>
                 )}
               </div>
             )}

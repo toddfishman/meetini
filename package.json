@@ -25,7 +25,9 @@
     "@types/luxon": "^3.4.2",
     "date-fns-tz": "^3.2.0",
     "formidable": "^3.5.2",
+    "framer-motion": "^12.5.0",
     "googleapis": "^144.0.0",
+    "ioredis": "^4.28.5",
     "iron-session": "^8.0.4",
     "lodash": "^4.17.21",
     "luxon": "^3.5.0",
@@ -41,6 +43,7 @@
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
+    "@types/ioredis": "^4.28.10",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
