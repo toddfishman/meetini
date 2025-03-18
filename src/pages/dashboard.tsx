@@ -1252,247 +1252,253 @@ export default function Dashboard() {
       <ConfirmationDialog {...confirmDialog} />
       <Toast {...toast} />
       {isCreateModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 overflow-y-auto py-8">
-          <div className="bg-[#2f3336] p-6 rounded-lg w-full max-w-2xl mx-4">
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-[#2f3336] p-6 rounded-lg w-full max-w-6xl mx-4">
             <h2 className="text-2xl font-bold text-[#22c55e] mb-6">Create New Meetini</h2>
-            <div className="space-y-6">
-              {/* Participants */}
-              <div>
-                <label className="block text-sm font-medium text-gray-400 mb-2">
-                  Participants
-                </label>
-                <div className="space-y-2">
-                  {selectedContacts.size > 0 ? (
-                    Array.from(selectedContacts).map(email => (
-                      <div key={email} className="flex items-center justify-between p-3 bg-[#1a1d23] rounded-lg">
-                        <span className="text-white">{email}</span>
-                        <button
-                          onClick={() => toggleContactSelection(email)}
-                          className="text-red-500 hover:text-red-400"
-                        >
-                          Remove
-                        </button>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-8 gap-y-6">
+              {/* Left Column */}
+              <div className="space-y-5">
+                {/* Participants */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-400 mb-2">
+                    Participants
+                  </label>
+                  <div className="space-y-2 max-h-[180px] overflow-y-auto">
+                    {selectedContacts.size > 0 ? (
+                      Array.from(selectedContacts).map(email => (
+                        <div key={email} className="flex items-center justify-between p-3 bg-[#1a1d23] rounded-lg">
+                          <span className="text-white">{email}</span>
+                          <button
+                            onClick={() => toggleContactSelection(email)}
+                            className="text-red-500 hover:text-red-400"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-gray-500 text-center p-4">
+                        No participants selected
                       </div>
-                    ))
-                  ) : (
-                    <div className="text-gray-500 text-center p-4">
-                      No participants selected
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
-              </div>
 
-              {/* Add Participant */}
-              <div>
-                <label htmlFor="addParticipant" className="block text-sm font-medium text-gray-400 mb-2">
-                  Add Participant
-                </label>
-                <input
-                  type="email"
-                  id="addParticipant"
-                  placeholder="Enter email address"
-                  className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent"
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      const email = e.currentTarget.value.trim();
-                      if (email && email.includes('@')) {
-                        toggleContactSelection(email);
-                        e.currentTarget.value = '';
+                {/* Add Participant */}
+                <div>
+                  <label htmlFor="addParticipant" className="block text-sm font-medium text-gray-400 mb-2">
+                    Add Participant
+                  </label>
+                  <input
+                    type="email"
+                    id="addParticipant"
+                    placeholder="Enter email address"
+                    className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        const email = e.currentTarget.value.trim();
+                        if (email && email.includes('@')) {
+                          toggleContactSelection(email);
+                          e.currentTarget.value = '';
+                        }
                       }
-                    }
-                  }}
-                />
-              </div>
-
-              {/* Meeting Title */}
-              <div>
-                <label htmlFor="meetingTitle" className="block text-sm font-medium text-gray-400 mb-2">
-                  Meeting Title
-                </label>
-                <input
-                  type="text"
-                  id="meetingTitle"
-                  placeholder="Enter meeting title"
-                  className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent"
-                  value={prompt}
-                  onChange={(e) => setPrompt(e.target.value)}
-                />
-              </div>
-
-              {/* Priority */}
-              <div>
-                <label htmlFor="priority" className="block text-sm font-medium text-gray-400 mb-2">
-                  Priority (1-10, higher is more urgent)
-                </label>
-                <div className="flex items-center space-x-4">
-                  <input
-                    type="range"
-                    id="priority"
-                    min="1"
-                    max="10"
-                    step="1"
-                    className="w-full h-2 bg-[#1a1d23] rounded-lg appearance-none cursor-pointer accent-[#22c55e]"
-                    value={meetingDetails.priority}
-                    onChange={(e) => setMeetingDetails(prev => ({ ...prev, priority: parseInt(e.target.value) }))}
+                    }}
                   />
-                  <span className="text-white font-medium w-8 text-center">
-                    {meetingDetails.priority}
-                  </span>
                 </div>
-                <div className="mt-1 flex justify-between text-xs text-gray-400">
-                  <span>Low Priority</span>
-                  <span>ASAP</span>
-                </div>
-              </div>
 
-              {/* Date and Time */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Meeting Title */}
                 <div>
-                  <label htmlFor="startDate" className="block text-sm font-medium text-gray-400 mb-2">
-                    Date
+                  <label htmlFor="meetingTitle" className="block text-sm font-medium text-gray-400 mb-2">
+                    Meeting Title
                   </label>
                   <input
-                    type="date"
-                    id="startDate"
-                    className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent"
-                    value={meetingDetails.startDate}
-                    onChange={(e) => setMeetingDetails(prev => ({ ...prev, startDate: e.target.value }))}
-                    min={new Date().toISOString().split('T')[0]}
+                    type="text"
+                    id="meetingTitle"
+                    placeholder="Enter meeting title"
+                    className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent"
+                    value={prompt}
+                    onChange={(e) => setPrompt(e.target.value)}
                   />
                 </div>
+
+                {/* Date and Time */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label htmlFor="startDate" className="block text-sm font-medium text-gray-400 mb-2">
+                      Date
+                    </label>
+                    <input
+                      type="date"
+                      id="startDate"
+                      className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent"
+                      value={meetingDetails.startDate}
+                      onChange={(e) => setMeetingDetails(prev => ({ ...prev, startDate: e.target.value }))}
+                      min={new Date().toISOString().split('T')[0]}
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="startTime" className="block text-sm font-medium text-gray-400 mb-2">
+                      Time
+                    </label>
+                    <input
+                      type="time"
+                      id="startTime"
+                      className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent"
+                      value={meetingDetails.startTime}
+                      onChange={(e) => setMeetingDetails(prev => ({ ...prev, startTime: e.target.value }))}
+                    />
+                  </div>
+                </div>
+
+                {/* Duration */}
                 <div>
-                  <label htmlFor="startTime" className="block text-sm font-medium text-gray-400 mb-2">
-                    Time
+                  <label htmlFor="duration" className="block text-sm font-medium text-gray-400 mb-2">
+                    Duration (minutes)
+                  </label>
+                  <select
+                    id="duration"
+                    className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent"
+                    value={meetingDetails.duration}
+                    onChange={(e) => setMeetingDetails(prev => ({ ...prev, duration: parseInt(e.target.value) }))}
+                  >
+                    <option value="15">15 minutes</option>
+                    <option value="30">30 minutes</option>
+                    <option value="45">45 minutes</option>
+                    <option value="60">1 hour</option>
+                    <option value="90">1.5 hours</option>
+                    <option value="120">2 hours</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Right Column */}
+              <div className="space-y-5">
+                {/* Priority */}
+                <div>
+                  <label htmlFor="priority" className="block text-sm font-medium text-gray-400 mb-2">
+                    Priority (1-10, higher is more urgent)
+                  </label>
+                  <div className="flex items-center space-x-4">
+                    <input
+                      type="range"
+                      id="priority"
+                      min="1"
+                      max="10"
+                      step="1"
+                      className="w-full h-2 bg-[#1a1d23] rounded-lg appearance-none cursor-pointer accent-[#22c55e]"
+                      value={meetingDetails.priority}
+                      onChange={(e) => setMeetingDetails(prev => ({ ...prev, priority: parseInt(e.target.value) }))}
+                    />
+                    <span className="text-white font-medium w-8 text-center">
+                      {meetingDetails.priority}
+                    </span>
+                  </div>
+                  <div className="mt-1 flex justify-between text-xs text-gray-400">
+                    <span>Low Priority</span>
+                    <span>ASAP</span>
+                  </div>
+                </div>
+
+                {/* Location */}
+                <div>
+                  <label htmlFor="location" className="block text-sm font-medium text-gray-400 mb-2">
+                    Location (optional)
                   </label>
                   <input
-                    type="time"
-                    id="startTime"
-                    className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent"
-                    value={meetingDetails.startTime}
-                    onChange={(e) => setMeetingDetails(prev => ({ ...prev, startTime: e.target.value }))}
+                    type="text"
+                    id="location"
+                    placeholder="Enter location or leave blank for virtual"
+                    className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent"
+                    value={meetingDetails.location}
+                    onChange={(e) => setMeetingDetails(prev => ({ ...prev, location: e.target.value }))}
+                  />
+                </div>
+
+                {/* Meeting Preferences */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-400 mb-2">
+                    Meeting Preferences
+                  </label>
+                  <div className="flex flex-wrap gap-3">
+                    <button
+                      onClick={() => setMeetingDetails(prev => ({
+                        ...prev,
+                        preferences: { ...prev.preferences, virtual: !prev.preferences.virtual }
+                      }))}
+                      className={`px-4 py-2 rounded-lg transition-colors ${
+                        meetingDetails.preferences.virtual
+                          ? 'bg-[#22c55e] text-white'
+                          : 'bg-[#1a1d23] text-gray-400 hover:bg-[#1a1d23]/80'
+                      }`}
+                    >
+                      Virtual
+                    </button>
+                    <button
+                      onClick={() => setMeetingDetails(prev => ({
+                        ...prev,
+                        preferences: { ...prev.preferences, inPerson: !prev.preferences.inPerson }
+                      }))}
+                      className={`px-4 py-2 rounded-lg transition-colors ${
+                        meetingDetails.preferences.inPerson
+                          ? 'bg-[#22c55e] text-white'
+                          : 'bg-[#1a1d23] text-gray-400 hover:bg-[#1a1d23]/80'
+                      }`}
+                    >
+                      In Person
+                    </button>
+                    <button
+                      onClick={() => setMeetingDetails(prev => ({
+                        ...prev,
+                        preferences: { ...prev.preferences, flexible: !prev.preferences.flexible }
+                      }))}
+                      className={`px-4 py-2 rounded-lg transition-colors ${
+                        meetingDetails.preferences.flexible
+                          ? 'bg-[#22c55e] text-white'
+                          : 'bg-[#1a1d23] text-gray-400 hover:bg-[#1a1d23]/80'
+                      }`}
+                    >
+                      Flexible
+                    </button>
+                  </div>
+                </div>
+
+                {/* Notes */}
+                <div>
+                  <label htmlFor="notes" className="block text-sm font-medium text-gray-400 mb-2">
+                    Notes (optional)
+                  </label>
+                  <textarea
+                    id="notes"
+                    placeholder="Add any additional notes or context"
+                    className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent"
+                    rows={4}
+                    value={meetingDetails.notes}
+                    onChange={(e) => setMeetingDetails(prev => ({ ...prev, notes: e.target.value }))}
                   />
                 </div>
               </div>
+            </div>
 
-              {/* Duration */}
-              <div>
-                <label htmlFor="duration" className="block text-sm font-medium text-gray-400 mb-2">
-                  Duration (minutes)
-                </label>
-                <select
-                  id="duration"
-                  className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent"
-                  value={meetingDetails.duration}
-                  onChange={(e) => setMeetingDetails(prev => ({ ...prev, duration: parseInt(e.target.value) }))}
-                >
-                  <option value="15">15 minutes</option>
-                  <option value="30">30 minutes</option>
-                  <option value="45">45 minutes</option>
-                  <option value="60">1 hour</option>
-                  <option value="90">1.5 hours</option>
-                  <option value="120">2 hours</option>
-                </select>
-              </div>
-
-              {/* Location */}
-              <div>
-                <label htmlFor="location" className="block text-sm font-medium text-gray-400 mb-2">
-                  Location (optional)
-                </label>
-                <input
-                  type="text"
-                  id="location"
-                  placeholder="Enter location or leave blank for virtual"
-                  className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent"
-                  value={meetingDetails.location}
-                  onChange={(e) => setMeetingDetails(prev => ({ ...prev, location: e.target.value }))}
-                />
-              </div>
-
-              {/* Meeting Preferences */}
-              <div>
-                <label className="block text-sm font-medium text-gray-400 mb-2">
-                  Meeting Preferences
-                </label>
-                <div className="flex flex-wrap gap-3">
-                  <button
-                    onClick={() => setMeetingDetails(prev => ({
-                      ...prev,
-                      preferences: { ...prev.preferences, virtual: !prev.preferences.virtual }
-                    }))}
-                    className={`px-4 py-2 rounded-lg transition-colors ${
-                      meetingDetails.preferences.virtual
-                        ? 'bg-[#22c55e] text-white'
-                        : 'bg-[#1a1d23] text-gray-400 hover:bg-[#1a1d23]/80'
-                    }`}
-                  >
-                    Virtual
-                  </button>
-                  <button
-                    onClick={() => setMeetingDetails(prev => ({
-                      ...prev,
-                      preferences: { ...prev.preferences, inPerson: !prev.preferences.inPerson }
-                    }))}
-                    className={`px-4 py-2 rounded-lg transition-colors ${
-                      meetingDetails.preferences.inPerson
-                        ? 'bg-[#22c55e] text-white'
-                        : 'bg-[#1a1d23] text-gray-400 hover:bg-[#1a1d23]/80'
-                    }`}
-                  >
-                    In Person
-                  </button>
-                  <button
-                    onClick={() => setMeetingDetails(prev => ({
-                      ...prev,
-                      preferences: { ...prev.preferences, flexible: !prev.preferences.flexible }
-                    }))}
-                    className={`px-4 py-2 rounded-lg transition-colors ${
-                      meetingDetails.preferences.flexible
-                        ? 'bg-[#22c55e] text-white'
-                        : 'bg-[#1a1d23] text-gray-400 hover:bg-[#1a1d23]/80'
-                    }`}
-                  >
-                    Flexible
-                  </button>
-                </div>
-              </div>
-
-              {/* Notes */}
-              <div>
-                <label htmlFor="notes" className="block text-sm font-medium text-gray-400 mb-2">
-                  Notes (optional)
-                </label>
-                <textarea
-                  id="notes"
-                  placeholder="Add any additional notes or context"
-                  className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent"
-                  rows={3}
-                  value={meetingDetails.notes}
-                  onChange={(e) => setMeetingDetails(prev => ({ ...prev, notes: e.target.value }))}
-                />
-              </div>
-
-              {/* Actions */}
-              <div className="flex justify-end space-x-4 pt-4">
-                <button
-                  onClick={() => setIsCreateModalOpen(false)}
-                  className="px-4 py-2 text-gray-400 hover:text-white transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={createMeetini}
-                  disabled={isProcessing || selectedContacts.size === 0}
-                  className={`px-6 py-2 rounded-lg font-medium transition-colors ${
-                    isProcessing || selectedContacts.size === 0
-                      ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
-                      : 'bg-[#22c55e] hover:bg-[#22c55e]/80 text-white'
-                  }`}
-                >
-                  {isProcessing ? 'Creating...' : 'Create Meeting'}
-                </button>
-              </div>
+            {/* Actions */}
+            <div className="flex justify-end space-x-4 pt-6 mt-6 border-t border-[#1a1d23]">
+              <button
+                onClick={() => setIsCreateModalOpen(false)}
+                className="px-4 py-2 text-gray-400 hover:text-white transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={createMeetini}
+                disabled={isProcessing || selectedContacts.size === 0}
+                className={`px-6 py-2 rounded-lg font-medium transition-colors ${
+                  isProcessing || selectedContacts.size === 0
+                    ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
+                    : 'bg-[#22c55e] hover:bg-[#22c55e]/80 text-white'
+                }`}
+              >
+                {isProcessing ? 'Creating...' : 'Create Meeting'}
+              </button>
             </div>
           </div>
         </div>
