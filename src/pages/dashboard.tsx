@@ -112,8 +112,14 @@ declare global {
 }
 
 export default function Dashboard() {
-  const { data: session, status } = useSession();
   const router = useRouter();
+  const { data: session, status } = useSession({
+    required: true,
+    onUnauthenticated() {
+      router.push('/');
+    },
+  });
+
   const [meetiniInvites, setMeetiniInvites] = useState<MeetiniInvite[]>([]);
   const [inviteLoading, setInviteLoading] = useState(false);
   const [error, setError] = useState<ErrorState | null>(null);
@@ -149,6 +155,47 @@ export default function Dashboard() {
 
   const MAX_PARTICIPANTS = 30;
   const PARTICIPANT_WARNING_THRESHOLD = 20;
+
+  const [meetingDetails, setMeetingDetails] = useState({
+    startDate: new Date().toISOString().split('T')[0],
+    startTime: '09:00',
+    duration: 30,
+    location: '',
+    priority: 5,
+    preferences: {
+      virtual: false,
+      inPerson: false,
+      flexible: true
+    },
+    notes: ''
+  });
+
+  const fetchInvites = useCallback(async () => {
+    if (!session?.accessToken) return;
+    
+    try {
+      setInviteLoading(true);
+      const response = await fetch('/api/meetini');
+      if (!response.ok) throw new Error('Failed to fetch invites');
+      const data = await response.json();
+      setMeetiniInvites(data);
+    } catch (err) {
+      console.error('Error fetching invites:', err);
+      setError({ message: 'Failed to load invites' });
+    } finally {
+      setInviteLoading(false);
+    }
+  }, [session]);
+
+  useEffect(() => {
+    if (status === 'loading') return;
+    
+    if (status === 'authenticated' && session?.accessToken) {
+      fetchInvites();
+    } else {
+      router.push('/');
+    }
+  }, [session, router, status, fetchInvites]);
 
   // Meeting type detection based on prompt keywords
   const detectMeetingType = useCallback((prompt: string): { type: string; confidence: number } => {
@@ -459,8 +506,17 @@ export default function Dashboard() {
       }
     } catch (err) {
       console.error('Search error:', err);
+      
+      // Extract most useful error message
+      let errorMessage = 'Failed to process request';
+      if (err instanceof Error) {
+        errorMessage = err.message;
+      } else if (typeof err === 'string') {
+        errorMessage = err;
+      }
+      
       setError({
-        message: err instanceof Error ? err.message : 'Failed to process request',
+        message: errorMessage,
         type: 'error'
       });
       setMeetingSummary(null);
@@ -544,101 +600,71 @@ export default function Dashboard() {
     });
   }, []);
 
-  const fetchInvites = useCallback(async () => {
-    try {
-      setInviteLoading(true);
-      const response = await fetch('/api/meetini');
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error);
-      setMeetiniInvites(data);
-    } catch (error) {
-      console.error('Failed to fetch invites:', error);
-      setError({
-        message: 'Failed to load invitations',
-        type: 'error'
-      });
-    } finally {
-      setInviteLoading(false);
-    }
-  }, []);
-
   const createMeetini = useCallback(async () => {
+    if (!session?.accessToken) {
+      throw new Error('No access token available');
+    }
+
+    if (!session?.user?.email) {
+      throw new Error('User email not available');
+    }
+
     try {
       setIsProcessing(true);
-      setError(null);
 
-      if (selectedContacts.size === 0) {
-        throw new Error('Please select at least one participant');
-      }
+      // Format participants
+      const participants = [
+        {
+          email: session.user.email,
+          name: session.user.name || session.user.email.split('@')[0],
+          notifyByEmail: true
+        },
+        ...Array.from(selectedContacts).map(email => ({
+          email,
+          name: meetingSummary?.contacts.find(c => c.email === email)?.name,
+          notifyByEmail: true
+        }))
+      ];
 
-      if (selectedContacts.size > MAX_PARTICIPANTS - 1) { // -1 to account for organizer
-        throw new Error(`Maximum ${MAX_PARTICIPANTS} participants allowed (including you as organizer)`);
-      }
+      // Format date and time
+      const startDateTime = new Date(`${meetingDetails.startDate}T${meetingDetails.startTime}`);
+      const endDateTime = new Date(startDateTime.getTime() + meetingDetails.duration * 60000);
 
-      if (!prompt.trim()) {
-        throw new Error('Please provide a meeting description');
-      }
-
-      // Get meeting type from prompt
-      const { type: detectedType } = detectMeetingType(prompt);
-
-      // Add the current user as organizer
-      const organizer = {
-        email: session?.user?.email!,
-        name: session?.user?.name || session?.user?.email!.split('@')[0],
-        notifyByEmail: false, // Don't notify organizer
-        isOrganizer: true
-      };
-
-      // Format other participants
-      const participants = Array.from(selectedContacts).map(email => ({
-        email,
-        name: meetingSummary?.contacts.find(c => c.email === email)?.name || email.split('@')[0],
-        notifyByEmail: true
-      }));
-
-      // Make the API request to our create endpoint
+      // Make the API request
       const response = await fetch('/api/meetini/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           invite: {
-            type: prompt,
-            description: `Created via Meetini\n\nOriginal prompt: ${prompt}`,
-            participants: [organizer, ...participants],
-            suggestedTimes: meetingSummary?.suggestedTimes,
-            location: detectedType === 'virtual' ? 'Virtual' : undefined
+            title: prompt || `${meetingDetails.preferences.virtual ? 'Virtual ' : ''}${meetingDetails.preferences.inPerson ? 'In-Person ' : ''}Meeting`,
+            type: meetingSummary?.type || 'meeting',
+            description: meetingDetails.notes 
+              ? `${meetingDetails.notes}\n\nCreated via Meetini${prompt ? `\nOriginal prompt: ${prompt}` : ''}`
+              : `Created via Meetini${prompt ? `\nOriginal prompt: ${prompt}` : ''}`,
+            participants,
+            startTime: startDateTime.toISOString(),
+            endTime: endDateTime.toISOString(),
+            duration: meetingDetails.duration,
+            location: meetingDetails.location || (meetingDetails.preferences.virtual ? 'Virtual' : undefined),
+            priority: meetingDetails.priority,
+            preferences: {
+              virtual: meetingDetails.preferences.virtual,
+              inPerson: meetingDetails.preferences.inPerson,
+              flexible: meetingDetails.preferences.flexible
+            },
+            createdBy: session.user.email
           }
         }),
       });
 
-      // Try to parse response as JSON
-      let data;
-      try {
-        data = await response.json();
-      } catch (parseError) {
-        console.error('Failed to parse response:', parseError);
-        throw new Error('Server returned an invalid response');
-      }
-
-      // Check for specific error cases
       if (!response.ok) {
-        // Handle known error cases
-        if (response.status === 401) {
-          throw new Error('Please sign in to create meetings');
-        }
-        if (response.status === 403) {
-          throw new Error('You do not have permission to create meetings');
-        }
-        if (response.status === 429) {
-          throw new Error('Too many requests. Please try again later');
-        }
-        
-        // Use server error message if available, otherwise fallback
-        throw new Error(data?.error || `Server error: ${response.status}`);
+        const errorData = await response.json().catch(() => ({ error: `Failed to create meeting (${response.status})` }));
+        throw new Error(errorData.error || errorData.message || `Failed to create meeting (${response.status})`);
       }
 
-      // Show success message with registration stats
+      const data = await response.json();
+
+      // Show success message
       const successMessage = data.unregisteredParticipants > 0
         ? `✨ Success! Sent ${data.registeredParticipants} invites and ${data.unregisteredParticipants} signup prompts`
         : '✨ Success! Sending invitations...';
@@ -649,28 +675,30 @@ export default function Dashboard() {
       setPrompt('');
       setSelectedContacts(new Set());
       setMeetingSummary(null);
-      await fetchInvites();
-
-    } catch (err) {
-      console.error('Failed to create Meetini:', err);
-      
-      // Extract most useful error message
-      let errorMessage = 'Failed to create meeting';
-      if (err instanceof Error) {
-        errorMessage = err.message;
-      } else if (typeof err === 'string') {
-        errorMessage = err;
-      }
-      
-      setError({
-        message: errorMessage,
-        type: 'error'
+      setMeetingDetails({
+        startDate: new Date().toISOString().split('T')[0],
+        startTime: '09:00',
+        duration: 30,
+        location: '',
+        priority: 5,
+        preferences: {
+          virtual: false,
+          inPerson: false,
+          flexible: true
+        },
+        notes: ''
       });
-      showToast('error', `${errorMessage}. Please try again.`);
+      setIsCreateModalOpen(false);
+
+      // Refresh invites
+      fetchInvites();
+    } catch (error) {
+      console.error('Failed to create meeting:', error);
+      showToast('error', error instanceof Error ? error.message : 'Failed to create meeting');
     } finally {
       setIsProcessing(false);
     }
-  }, [prompt, selectedContacts, meetingSummary, session, showToast, detectMeetingType]);
+  }, [session, prompt, selectedContacts, meetingSummary, meetingDetails, showToast, fetchInvites]);
 
   const handleInviteAction = useCallback(async (id: string, action: 'accept' | 'decline' | 'cancel') => {
     const confirmActions = {
@@ -781,11 +809,28 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
+    if (status === 'loading') return;
+
+    if (!session?.accessToken) {
+      router.push('/');
+      return;
+    }
+  }, [session, router, status]);
+
+  useEffect(() => {
+    if (status === 'loading') return;
+
+    if (session?.accessToken) {
+      fetchInvites().catch(console.error);
+    }
+  }, [status, session, fetchInvites]);
+
+  useEffect(() => {
     if (status === 'unauthenticated') {
       router.replace('/');
     } else if (status === 'authenticated' && !session?.error) {
       // Only fetch data if we have a valid session
-      fetchInvites();
+      fetchInvites().catch(console.error);
     }
   }, [status, session, router, fetchInvites]);
 
@@ -914,7 +959,7 @@ export default function Dashboard() {
                   <h3 className="text-xl font-semibold text-[#22c55e] mb-4">Manual Setup for Meetini</h3>
                   <div className="relative flex items-center">
                     <button
-                      onClick={() => {/* TODO: Implement manual setup */}}
+                      onClick={() => setIsCreateModalOpen(true)}
                       className="absolute left-4 text-[#22c55e] hover:text-[#22c55e]/80 transition-colors"
                       aria-label="Open manual setup"
                     >
@@ -925,7 +970,7 @@ export default function Dashboard() {
                       placeholder="Click the calendar icon to manually set up a Meetini"
                       className="w-full pl-12 pr-4 py-3 bg-[#2f3336] border border-[#2f3336] rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent cursor-pointer"
                       readOnly
-                      onClick={() => {/* TODO: Implement manual setup */}}
+                      onClick={() => setIsCreateModalOpen(true)}
                     />
                   </div>
                 </div>
@@ -1203,6 +1248,255 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+      {/* Modals */}
+      <ConfirmationDialog {...confirmDialog} />
+      <Toast {...toast} />
+      {isCreateModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 overflow-y-auto py-8">
+          <div className="bg-[#2f3336] p-6 rounded-lg w-full max-w-2xl mx-4">
+            <h2 className="text-2xl font-bold text-[#22c55e] mb-6">Create New Meetini</h2>
+            <div className="space-y-6">
+              {/* Participants */}
+              <div>
+                <label className="block text-sm font-medium text-gray-400 mb-2">
+                  Participants
+                </label>
+                <div className="space-y-2">
+                  {selectedContacts.size > 0 ? (
+                    Array.from(selectedContacts).map(email => (
+                      <div key={email} className="flex items-center justify-between p-3 bg-[#1a1d23] rounded-lg">
+                        <span className="text-white">{email}</span>
+                        <button
+                          onClick={() => toggleContactSelection(email)}
+                          className="text-red-500 hover:text-red-400"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="text-gray-500 text-center p-4">
+                      No participants selected
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Add Participant */}
+              <div>
+                <label htmlFor="addParticipant" className="block text-sm font-medium text-gray-400 mb-2">
+                  Add Participant
+                </label>
+                <input
+                  type="email"
+                  id="addParticipant"
+                  placeholder="Enter email address"
+                  className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      const email = e.currentTarget.value.trim();
+                      if (email && email.includes('@')) {
+                        toggleContactSelection(email);
+                        e.currentTarget.value = '';
+                      }
+                    }
+                  }}
+                />
+              </div>
+
+              {/* Meeting Title */}
+              <div>
+                <label htmlFor="meetingTitle" className="block text-sm font-medium text-gray-400 mb-2">
+                  Meeting Title
+                </label>
+                <input
+                  type="text"
+                  id="meetingTitle"
+                  placeholder="Enter meeting title"
+                  className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent"
+                  value={prompt}
+                  onChange={(e) => setPrompt(e.target.value)}
+                />
+              </div>
+
+              {/* Priority */}
+              <div>
+                <label htmlFor="priority" className="block text-sm font-medium text-gray-400 mb-2">
+                  Priority (1-10, higher is more urgent)
+                </label>
+                <div className="flex items-center space-x-4">
+                  <input
+                    type="range"
+                    id="priority"
+                    min="1"
+                    max="10"
+                    step="1"
+                    className="w-full h-2 bg-[#1a1d23] rounded-lg appearance-none cursor-pointer accent-[#22c55e]"
+                    value={meetingDetails.priority}
+                    onChange={(e) => setMeetingDetails(prev => ({ ...prev, priority: parseInt(e.target.value) }))}
+                  />
+                  <span className="text-white font-medium w-8 text-center">
+                    {meetingDetails.priority}
+                  </span>
+                </div>
+                <div className="mt-1 flex justify-between text-xs text-gray-400">
+                  <span>Low Priority</span>
+                  <span>ASAP</span>
+                </div>
+              </div>
+
+              {/* Date and Time */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label htmlFor="startDate" className="block text-sm font-medium text-gray-400 mb-2">
+                    Date
+                  </label>
+                  <input
+                    type="date"
+                    id="startDate"
+                    className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent"
+                    value={meetingDetails.startDate}
+                    onChange={(e) => setMeetingDetails(prev => ({ ...prev, startDate: e.target.value }))}
+                    min={new Date().toISOString().split('T')[0]}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="startTime" className="block text-sm font-medium text-gray-400 mb-2">
+                    Time
+                  </label>
+                  <input
+                    type="time"
+                    id="startTime"
+                    className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent"
+                    value={meetingDetails.startTime}
+                    onChange={(e) => setMeetingDetails(prev => ({ ...prev, startTime: e.target.value }))}
+                  />
+                </div>
+              </div>
+
+              {/* Duration */}
+              <div>
+                <label htmlFor="duration" className="block text-sm font-medium text-gray-400 mb-2">
+                  Duration (minutes)
+                </label>
+                <select
+                  id="duration"
+                  className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent"
+                  value={meetingDetails.duration}
+                  onChange={(e) => setMeetingDetails(prev => ({ ...prev, duration: parseInt(e.target.value) }))}
+                >
+                  <option value="15">15 minutes</option>
+                  <option value="30">30 minutes</option>
+                  <option value="45">45 minutes</option>
+                  <option value="60">1 hour</option>
+                  <option value="90">1.5 hours</option>
+                  <option value="120">2 hours</option>
+                </select>
+              </div>
+
+              {/* Location */}
+              <div>
+                <label htmlFor="location" className="block text-sm font-medium text-gray-400 mb-2">
+                  Location (optional)
+                </label>
+                <input
+                  type="text"
+                  id="location"
+                  placeholder="Enter location or leave blank for virtual"
+                  className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent"
+                  value={meetingDetails.location}
+                  onChange={(e) => setMeetingDetails(prev => ({ ...prev, location: e.target.value }))}
+                />
+              </div>
+
+              {/* Meeting Preferences */}
+              <div>
+                <label className="block text-sm font-medium text-gray-400 mb-2">
+                  Meeting Preferences
+                </label>
+                <div className="flex flex-wrap gap-3">
+                  <button
+                    onClick={() => setMeetingDetails(prev => ({
+                      ...prev,
+                      preferences: { ...prev.preferences, virtual: !prev.preferences.virtual }
+                    }))}
+                    className={`px-4 py-2 rounded-lg transition-colors ${
+                      meetingDetails.preferences.virtual
+                        ? 'bg-[#22c55e] text-white'
+                        : 'bg-[#1a1d23] text-gray-400 hover:bg-[#1a1d23]/80'
+                    }`}
+                  >
+                    Virtual
+                  </button>
+                  <button
+                    onClick={() => setMeetingDetails(prev => ({
+                      ...prev,
+                      preferences: { ...prev.preferences, inPerson: !prev.preferences.inPerson }
+                    }))}
+                    className={`px-4 py-2 rounded-lg transition-colors ${
+                      meetingDetails.preferences.inPerson
+                        ? 'bg-[#22c55e] text-white'
+                        : 'bg-[#1a1d23] text-gray-400 hover:bg-[#1a1d23]/80'
+                    }`}
+                  >
+                    In Person
+                  </button>
+                  <button
+                    onClick={() => setMeetingDetails(prev => ({
+                      ...prev,
+                      preferences: { ...prev.preferences, flexible: !prev.preferences.flexible }
+                    }))}
+                    className={`px-4 py-2 rounded-lg transition-colors ${
+                      meetingDetails.preferences.flexible
+                        ? 'bg-[#22c55e] text-white'
+                        : 'bg-[#1a1d23] text-gray-400 hover:bg-[#1a1d23]/80'
+                    }`}
+                  >
+                    Flexible
+                  </button>
+                </div>
+              </div>
+
+              {/* Notes */}
+              <div>
+                <label htmlFor="notes" className="block text-sm font-medium text-gray-400 mb-2">
+                  Notes (optional)
+                </label>
+                <textarea
+                  id="notes"
+                  placeholder="Add any additional notes or context"
+                  className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent"
+                  rows={3}
+                  value={meetingDetails.notes}
+                  onChange={(e) => setMeetingDetails(prev => ({ ...prev, notes: e.target.value }))}
+                />
+              </div>
+
+              {/* Actions */}
+              <div className="flex justify-end space-x-4 pt-4">
+                <button
+                  onClick={() => setIsCreateModalOpen(false)}
+                  className="px-4 py-2 text-gray-400 hover:text-white transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={createMeetini}
+                  disabled={isProcessing || selectedContacts.size === 0}
+                  className={`px-6 py-2 rounded-lg font-medium transition-colors ${
+                    isProcessing || selectedContacts.size === 0
+                      ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
+                      : 'bg-[#22c55e] hover:bg-[#22c55e]/80 text-white'
+                  }`}
+                >
+                  {isProcessing ? 'Creating...' : 'Create Meeting'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
