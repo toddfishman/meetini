@@ -158,4 +158,66 @@ function isSlotAvailable(
   }
   
   return true;
-} 
+}
+
+export async function createCalendarEvent(
+  req: NextApiRequest,
+  eventDetails: {
+    summary: string;
+    description?: string;
+    location?: string;
+    start: Date;
+    end: Date;
+    attendees: Array<{ email: string; name?: string }>;
+  }
+): Promise<string> {
+  try {
+    const token = await getToken({ req });
+    if (!token?.accessToken) throw new Error('No access token found');
+
+    const auth = new google.auth.OAuth2(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET
+    );
+
+    auth.setCredentials({
+      access_token: token.accessToken as string,
+      refresh_token: token.refreshToken as string
+    });
+
+    const event = {
+      summary: eventDetails.summary,
+      description: eventDetails.description,
+      location: eventDetails.location,
+      start: {
+        dateTime: eventDetails.start.toISOString(),
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
+      },
+      end: {
+        dateTime: eventDetails.end.toISOString(),
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
+      },
+      attendees: eventDetails.attendees.map(({ email, name }) => ({
+        email,
+        displayName: name
+      })),
+      guestsCanModify: true,
+      guestsCanSeeOtherGuests: true,
+      reminders: {
+        useDefault: true
+      }
+    };
+
+    const response = await calendar.events.insert({
+      auth,
+      calendarId: 'primary',
+      requestBody: event,
+      sendUpdates: 'all'
+    });
+
+    return response.data.id || '';
+  } catch (error) {
+    console.error('Failed to create calendar event:', error);
+    throw new Error('Failed to create calendar event');
+  }
+}

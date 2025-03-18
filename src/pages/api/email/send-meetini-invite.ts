@@ -1,6 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getServerSession } from 'next-auth';
-import { authOptions } from '../auth/[...nextauth]';
+import authOptions from '../auth/[...nextauth]';
 import { Resend } from 'resend';
 
 const resend = new Resend(process.env.RESEND_API_KEY);
@@ -51,7 +51,7 @@ export default async function handler(
         console.log('Sending Meetini invite email to:', userEmail);
 
         const result = await resend.emails.send({
-          from: 'Meetini <onboarding@resend.dev>',
+          from: `Meetini <${process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev'}>`,
           to: userEmail,
           subject: `${creator.name || 'Someone'} invited you to ${invite.title || 'a meeting'}`,
           html: emailContent
@@ -95,7 +95,7 @@ function generateMeetiniInviteEmail(
         ${invite.description ? `<p><strong>Description:</strong> ${invite.description}</p>` : ''}
         <p><strong>Participants:</strong></p>
         <ul>
-          ${invite.participants.map(p => `<li>${p.name || p.email}</li>`).join('')}
+          ${invite.participants.map((p: { email: string; name?: string }) => `<li>${p.name || p.email}</li>`).join('')}
         </ul>
         ${invite.suggestedTimes?.length ? `
           <p><strong>Suggested Times:</strong></p>

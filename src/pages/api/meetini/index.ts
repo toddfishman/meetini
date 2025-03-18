@@ -26,14 +26,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const token = await getToken({ req });
     
     if (!token?.email) {
+      console.error('Authentication error: No token or email');
       return res.status(401).json({ 
         error: 'Not authenticated',
-        details: 'Please sign in to create a Meetini'
+        details: 'Please sign in to access invites'
       });
     }
 
     if (req.method === 'POST') {
-      const { title, contacts, location, preferences, proposedTimes } = req.body;
+      const { title, contacts, location, preferences, proposedTimes: reqProposedTimes } = req.body;
 
       // Log request data for debugging
       console.log('Received request:', {
@@ -51,6 +52,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
       
       // If no proposed times, set default to next hour rounded up
+      let proposedTimes = reqProposedTimes;
       if (!Array.isArray(proposedTimes) || proposedTimes.length === 0) {
         const now = new Date();
         const nextHour = new Date(now.setHours(now.getHours() + 1, 0, 0, 0));
@@ -79,7 +81,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             type: 'sent',
             createdBy: token.email,
             location: location?.trim(),
-            proposedTimes: proposedTimes.map(time => new Date(time)),
+            proposedTimes: proposedTimes.map((time: string) => new Date(time)),
             participants: {
               create: contacts.map(contact => ({
                 email: contact.type === 'email' ? contact.value : null,
@@ -154,32 +156,40 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     if (req.method === 'GET') {
-      const invitations = await prisma.invitation.findMany({
-        where: {
-          OR: [
-            { createdBy: token.email },
-            {
-              participants: {
-                some: {
-                  OR: [
-                    { email: token.email },
-                    { phoneNumber: { not: null } } // Include invitations where user is invited by phone
-                  ]
+      try {
+        const invitations = await prisma.invitation.findMany({
+          where: {
+            OR: [
+              { createdBy: token.email },
+              {
+                participants: {
+                  some: {
+                    OR: [
+                      { email: token.email },
+                      { phoneNumber: { not: null } } // Include invitations where user is invited by phone
+                    ]
+                  }
                 }
               }
-            }
-          ]
-        },
-        include: {
-          participants: true,
-          preferences: true
-        },
-        orderBy: {
-          createdAt: 'desc'
-        }
-      });
+            ]
+          },
+          include: {
+            participants: true,
+            preferences: true
+          },
+          orderBy: {
+            createdAt: 'desc'
+          }
+        });
 
-      return res.status(200).json(invitations);
+        return res.status(200).json(invitations);
+      } catch (dbError) {
+        console.error('Database error:', dbError);
+        return res.status(500).json({ 
+          error: 'Failed to fetch invites',
+          details: dbError instanceof Error ? dbError.message : 'Unknown database error'
+        });
+      }
     }
 
     if (req.method === 'PUT') {

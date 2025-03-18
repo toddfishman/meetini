@@ -16,6 +16,7 @@ interface MeetingDetails {
   };
   participants: string[];
   additionalHtml?: string;  // For signup prompts and other custom content
+  to?: string;  // Optional recipient email
 }
 
 export class EmailService {
@@ -23,24 +24,13 @@ export class EmailService {
   private fromEmail: string;
 
   constructor() {
-    const missingVars = [];
-    if (!process.env.RESEND_API_KEY) {
-      missingVars.push('RESEND_API_KEY');
-    }
-    if (!process.env.RESEND_FROM_EMAIL) {
-      missingVars.push('RESEND_FROM_EMAIL');
-    }
-    
-    if (missingVars.length > 0) {
-      const errorMessage = `Missing required environment variables: ${missingVars.join(', ')}. Please set these in your .env file or environment.`;
-      console.error(errorMessage);
-      throw new Error(errorMessage);
+    if (!process.env.RESEND_API_KEY || !process.env.RESEND_FROM_EMAIL) {
+      throw new Error('Missing required environment variables: RESEND_API_KEY and/or RESEND_FROM_EMAIL');
     }
 
     this.resend = new Resend(process.env.RESEND_API_KEY);
     this.fromEmail = process.env.RESEND_FROM_EMAIL;
     
-    // Log initialization but not the actual values
     console.log('EmailService initialized with Resend configuration');
   }
 
@@ -105,17 +95,27 @@ export class EmailService {
     `;
 
     try {
-      // Send to all participants including the creator
-      const emailPromises = details.participants.map(async (email) => {
+      // Send to specified recipient or all participants
+      if (details.to) {
         await this.resend.emails.send({
           from: `Meetini <${this.fromEmail}>`,
-          to: email,
+          to: details.to,
           subject: `${details.type} with ${participantNames}`,
           html: emailContent
         });
-      });
+      } else {
+        // Send to all participants including the creator
+        const emailPromises = details.participants.map(async (email) => {
+          await this.resend.emails.send({
+            from: `Meetini <${this.fromEmail}>`,
+            to: email,
+            subject: `${details.type} with ${participantNames}`,
+            html: emailContent
+          });
+        });
 
-      await Promise.all(emailPromises);
+        await Promise.all(emailPromises);
+      }
     } catch (error) {
       console.error('Failed to send confirmation email:', error);
       throw new Error('Failed to send meeting confirmation email');

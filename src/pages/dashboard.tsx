@@ -120,6 +120,14 @@ export default function Dashboard() {
     },
   });
 
+  console.log('Dashboard Session:', {
+    status,
+    hasSession: !!session,
+    hasAccessToken: !!session?.accessToken,
+    hasUser: !!session?.user,
+    user: session?.user,
+  });
+
   const [meetiniInvites, setMeetiniInvites] = useState<MeetiniInvite[]>([]);
   const [inviteLoading, setInviteLoading] = useState(false);
   const [error, setError] = useState<ErrorState | null>(null);
@@ -601,15 +609,22 @@ export default function Dashboard() {
   }, []);
 
   const createMeetini = useCallback(async () => {
-    if (!session?.accessToken) {
-      throw new Error('No access token available');
-    }
-
-    if (!session?.user?.email) {
-      throw new Error('User email not available');
-    }
-
     try {
+      if (!session) {
+        console.error('No session available');
+        throw new Error('Not authenticated');
+      }
+
+      if (!session.accessToken) {
+        console.error('No access token available', { session });
+        throw new Error('Missing access token');
+      }
+
+      if (!session.user?.email) {
+        console.error('No user email available');
+        throw new Error('User email not available');
+      }
+
       setIsProcessing(true);
 
       // Format participants
@@ -633,7 +648,10 @@ export default function Dashboard() {
       // Make the API request
       const response = await fetch('/api/meetini/create', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.accessToken}`
+        },
         body: JSON.stringify({
           invite: {
             title: prompt || `${meetingDetails.preferences.virtual ? 'Virtual ' : ''}${meetingDetails.preferences.inPerson ? 'In-Person ' : ''}Meeting`,

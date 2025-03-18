@@ -1,178 +1,151 @@
-import NextAuth, { AuthOptions, JWT, Session, Account, Profile, User } from "next-auth";
-import GoogleProvider from "next-auth/providers/google";
-import { google } from "googleapis";
-import { prisma } from "@/lib/prisma";
+import NextAuth, { NextAuthOptions, User } from 'next-auth';
+import GoogleProvider from 'next-auth/providers/google';
+import { JWT } from 'next-auth/jwt';
 
-declare module "next-auth" {
-  interface Session {
-    accessToken?: string;
-    refreshToken?: string;
-    user: {
-      email: string;
-      name: string;
-      image: string;
-    };
-    error?: 'RefreshAccessTokenError';
-    accessTokenExpires?: number;
-  }
-  interface JWT {
-    accessToken?: string;
-    refreshToken?: string;
-    accessTokenExpires?: number;
-    error?: 'RefreshAccessTokenError';
-    email?: string;
-  }
-}
-
-// Required scopes as per our memory
-const REQUIRED_SCOPES = [
+const SCOPES = [
   'openid',
   'https://www.googleapis.com/auth/userinfo.email',
   'https://www.googleapis.com/auth/userinfo.profile',
+  'https://www.googleapis.com/auth/calendar',
+  'https://www.googleapis.com/auth/calendar.events',
   'https://www.googleapis.com/auth/gmail.modify',
   'https://www.googleapis.com/auth/gmail.send',
   'https://www.googleapis.com/auth/gmail.compose',
-  'https://www.googleapis.com/auth/calendar',
-  'https://www.googleapis.com/auth/calendar.events',
   'https://www.googleapis.com/auth/contacts.readonly'
 ] as const;
 
-export const authOptions: AuthOptions = {
+interface ExtendedToken extends JWT {
+  accessToken: string;
+  refreshToken: string;
+  accessTokenExpires: number;
+  user: {
+    email: string;
+    name: string;
+    image: string;
+  };
+  error?: string;
+}
+
+const authOptions: NextAuthOptions = {
   providers: [
     GoogleProvider({
       clientId: process.env.GOOGLE_CLIENT_ID!,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
       authorization: {
         params: {
-          scope: REQUIRED_SCOPES.join(' '),
+          scope: SCOPES.join(' '),
+          access_type: 'offline',
           prompt: 'consent',
-          access_type: 'offline'  // Needed for refresh tokens
+          response_type: 'code'
         }
       }
-    }),
+    })
   ],
   session: {
-    strategy: "jwt",
     maxAge: 30 * 24 * 60 * 60, // 30 days
+    strategy: 'jwt'
   },
   callbacks: {
-    async signIn({ user, account }) {
-      if (!user.email) {
-        console.error('Sign in failed: No email provided');
-        return false;
-      }
-
-      // Verify we have all required scopes
-      const grantedScopes = account?.scope?.split(' ') || [];
-      const missingScopes = REQUIRED_SCOPES.filter(scope => !grantedScopes.includes(scope));
-      
-      if (missingScopes.length > 0) {
-        console.error('Missing required scopes:', missingScopes);
-        return false;
-      }
-
-      try {
-        // Check if user exists
-        const existingUser = await prisma.user.findUnique({
-          where: { email: user.email },
+    async jwt({ token, account, user }) {
+      // Initial sign in
+      if (account && user) {
+        console.log('NextAuth: Initial sign in', {
+          hasAccessToken: !!account.access_token,
+          hasRefreshToken: !!account.refresh_token,
+          hasExpiresIn: !!account.expires_in,
+          scopes: account.scope?.split(' ')
         });
 
-        if (!existingUser) {
-          // Create new user if they don't exist
-          await prisma.user.create({
-            data: {
-              email: user.email,
-              name: user.name || '',
-              image: user.image || '',
-            },
-          });
-        }
-
-        return true;
-      } catch (error) {
-        console.error('Error in signIn callback:', error);
-        return false;
-      }
-    },
-    async jwt({ token, user, account, profile }) {
-      // Initial sign in
-      if (account && profile) {
+        const expires_in = account.expires_in ? Number(account.expires_in) : 3600;
         return {
-          accessToken: account.access_token || undefined,
-          accessTokenExpires: account.expires_at ? account.expires_at * 1000 : undefined,
-          refreshToken: account.refresh_token || undefined,
-          email: profile.email || undefined,
-        };
+          ...token,
+          accessToken: account.access_token,
+          refreshToken: account.refresh_token,
+          accessTokenExpires: Date.now() + (expires_in * 1000),
+          user: {
+            email: user.email || '',
+            name: user.name || '',
+            image: user.image || ''
+          }
+        } as ExtendedToken;
       }
+
+      const typedToken = token as ExtendedToken;
 
       // Return previous token if the access token has not expired yet
-      if (token.accessTokenExpires && Date.now() < token.accessTokenExpires) {
-        return token;
+      if (typedToken.accessTokenExpires && Date.now() < typedToken.accessTokenExpires) {
+        console.log('NextAuth: Using existing token', {
+          expiresIn: Math.round((typedToken.accessTokenExpires - Date.now()) / 1000)
+        });
+        return typedToken;
       }
 
       // Access token has expired, try to update it
       try {
-        const oauth2Client = new google.auth.OAuth2(
-          process.env.GOOGLE_CLIENT_ID,
-          process.env.GOOGLE_CLIENT_SECRET,
-          process.env.NEXTAUTH_URL
-        );
-
-        oauth2Client.setCredentials({
-          refresh_token: token.refreshToken || undefined
+        console.log('NextAuth: Refreshing token');
+        const response = await fetch('https://oauth2.googleapis.com/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            client_id: process.env.GOOGLE_CLIENT_ID!,
+            client_secret: process.env.GOOGLE_CLIENT_SECRET!,
+            grant_type: 'refresh_token',
+            refresh_token: typedToken.refreshToken
+          })
         });
 
-        const { credentials } = await oauth2Client.refreshAccessToken();
-        
-        console.log('Token refreshed successfully');
+        const tokens = await response.json();
+
+        if (!response.ok) {
+          console.error('NextAuth: Token refresh failed', tokens);
+          throw tokens;
+        }
+
+        console.log('NextAuth: Token refreshed successfully');
 
         return {
-          ...token,
-          accessToken: credentials.access_token || undefined,
-          accessTokenExpires: credentials.expiry_date || undefined,
-          refreshToken: credentials.refresh_token || token.refreshToken,
-          error: undefined as 'RefreshAccessTokenError' | undefined,
+          ...typedToken,
+          accessToken: tokens.access_token,
+          accessTokenExpires: Date.now() + (tokens.expires_in * 1000),
+          refreshToken: tokens.refresh_token ?? typedToken.refreshToken
         };
       } catch (error) {
-        console.error('Error refreshing access token:', error);
-
+        console.error('NextAuth: Error refreshing access token', error);
         return {
-          ...token,
-          error: 'RefreshAccessTokenError' as const,
-          accessToken: undefined,
-          accessTokenExpires: undefined,
+          ...typedToken,
+          error: 'RefreshAccessTokenError'
         };
       }
     },
-    async session({ session, token }): Promise<Session> {
-      return {
-        ...session,
-        accessToken: token.accessToken,
-        error: token.error as 'RefreshAccessTokenError' | undefined,
-        accessTokenExpires: token.accessTokenExpires,
-        refreshToken: token.refreshToken,
-      };
-    }
-  },
-  secret: process.env.NEXTAUTH_SECRET,
-  pages: {
-    signIn: '/auth/signin',
-    error: '/auth/error',
-  },
-  debug: process.env.NODE_ENV === 'development',
-  logger: {
-    error(code, ...message) {
-      console.error('NextAuth error:', code, message);
-    },
-    warn(code, ...message) {
-      console.warn('NextAuth warning:', code, message);
-    },
-    debug(code, ...message) {
-      if (process.env.NODE_ENV === 'development') {
-        console.log('NextAuth debug:', code, message);
+    async session({ session, token }) {
+      const typedToken = token as ExtendedToken;
+      
+      console.log('NextAuth: Creating session', {
+        hasToken: !!typedToken,
+        hasAccessToken: !!typedToken.accessToken,
+        hasRefreshToken: !!typedToken.refreshToken,
+        hasError: !!typedToken.error
+      });
+
+      // Add token information to the session
+      session.accessToken = typedToken.accessToken;
+      session.refreshToken = typedToken.refreshToken;
+      session.error = typedToken.error;
+      session.accessTokenExpires = typedToken.accessTokenExpires;
+
+      // Ensure user information is properly set
+      if (typedToken.user) {
+        session.user = typedToken.user;
       }
-    },
-  },
+
+      // If there was a refresh error, pass it to the client
+      if (typedToken.error) {
+        throw new Error('Failed to refresh access token');
+      }
+
+      return session;
+    }
+  }
 };
 
 export default NextAuth(authOptions);
