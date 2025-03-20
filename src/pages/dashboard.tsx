@@ -21,12 +21,20 @@ interface CalendarEvent {
   };
 }
 
+interface Participant {
+  email: string | null;
+  phoneNumber: string | null;
+  name: string | null;
+  notifyByEmail: boolean;
+  notifyBySms: boolean;
+}
+
 interface MeetiniInvite {
   id: string;
   title: string;
   status: 'pending' | 'accepted' | 'declined';
   type: 'sent' | 'received';
-  participants: string[];
+  participants: Participant[];
   createdAt: string;
   proposedTimes: string[];
   location?: string;
@@ -179,13 +187,24 @@ export default function Dashboard() {
   });
 
   const fetchInvites = useCallback(async () => {
-    if (!session?.accessToken) return;
+    if (!session?.accessToken) {
+      console.log('No access token available');
+      return;
+    }
     
     try {
+      console.log('Fetching invites...');
       setInviteLoading(true);
       const response = await fetch('/api/meetini');
-      if (!response.ok) throw new Error('Failed to fetch invites');
+      
+      if (!response.ok) {
+        const error = await response.json();
+        console.error('Failed to fetch invites:', error);
+        throw new Error('Failed to fetch invites');
+      }
+      
       const data = await response.json();
+      console.log('Received invites:', data);
       setMeetiniInvites(data);
     } catch (err) {
       console.error('Error fetching invites:', err);
@@ -196,14 +215,23 @@ export default function Dashboard() {
   }, [session]);
 
   useEffect(() => {
-    if (status === 'loading') return;
+    if (status === 'loading') {
+      console.log('Session loading...');
+      return;
+    }
     
     if (status === 'authenticated' && session?.accessToken) {
+      console.log('Session authenticated, fetching invites...');
       fetchInvites();
-    } else {
+    } else if (status === 'unauthenticated') {
       router.push('/');
     }
-  }, [session, router, status, fetchInvites]);
+  }, [status, session, fetchInvites, router]);
+
+  const filteredInvites = useMemo(() => {
+    console.log('Filtering invites:', { activeTab, invites: meetiniInvites });
+    return meetiniInvites.filter(invite => invite.type === activeTab);
+  }, [meetiniInvites, activeTab]);
 
   // Meeting type detection based on prompt keywords
   const detectMeetingType = useCallback((prompt: string): { type: string; confidence: number } => {
@@ -868,16 +896,11 @@ export default function Dashboard() {
     }
   }, [router.query, initialPrompt]);
 
-  const filteredInvites = useMemo(() => 
-    meetiniInvites.filter(invite => invite.type === activeTab),
-    [meetiniInvites, activeTab]
-  );
-
   // Loading state
   if (status === 'loading') {
     return (
-      <div className="min-h-screen bg-[#1a1d23] text-white flex items-center justify-center">
-        <div className="text-[#22c55e]">Loading...</div>
+      <div className="min-h-screen bg-[#1a1d1e] flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#22c55e]"></div>
       </div>
     );
   }
@@ -1172,7 +1195,7 @@ export default function Dashboard() {
 
             {/* Invitations Section */}
             <div className="bg-[#2f3336] p-6 rounded-lg">
-              <h2 className="text-xl font-bold text-[#22c55e] tracking-tight mb-4">Your Meetini's</h2>
+              <h2 className="text-2xl font-bold text-[#22c55e] tracking-tight mb-4">Your Meetini's</h2>
               
               <div className="flex space-x-4 mb-6">
                 <button
@@ -1204,35 +1227,32 @@ export default function Dashboard() {
               ) : filteredInvites.length > 0 ? (
                 <div className="space-y-4">
                   {filteredInvites.map((invite) => (
-                    <div key={invite.id} className="p-4 bg-[#2f3336] rounded-lg">
+                    <div
+                      key={invite.id}
+                      className="border rounded-lg p-4 hover:shadow-md transition-shadow"
+                    >
                       <div className="flex justify-between items-start">
                         <div>
-                          <h4 className="font-medium text-white">{invite.title}</h4>
-                          <p className="text-sm text-gray-400 mt-1">
-                            {new Date(invite.createdAt).toLocaleDateString()}
-                          </p>
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            {invite.participants.map((participant, index) => (
-                              <span
-                                key={index}
-                                className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-gray-700 text-gray-300"
-                              >
-                                {participant}
-                              </span>
-                            ))}
+                          <h3 className="text-lg font-medium text-gray-900">{invite.title}</h3>
+                          <div className="mt-1 text-sm text-gray-500">
+                            {activeTab === 'received' ? (
+                              <span>From: {invite.createdBy}</span>
+                            ) : (
+                              <span>To: {invite.participants.map(p => p.email || p.phoneNumber || p.name || 'Unknown').join(', ')}</span>
+                            )}
+                          </div>
+                          <div className="mt-2">
+                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(invite.status)}`}>
+                              {invite.status.charAt(0).toUpperCase() + invite.status.slice(1)}
+                            </span>
                           </div>
                         </div>
-                        <div className="flex items-center space-x-2">
-                          <span className={`text-sm ${getStatusColor(invite.status)}`}>
-                            {invite.status.charAt(0).toUpperCase() + invite.status.slice(1)}
-                          </span>
-                        </div>
                       </div>
-                      {activeTab === 'received' && invite.status === 'pending' && (
+                      {activeTab === 'received' && invite.status === 'pending' && !isProcessing && (
                         <div className="mt-4 flex space-x-2">
                           <button
                             onClick={() => handleInviteAction(invite.id, 'accept')}
-                            className="px-3 py-1 bg-[#22c55e] text-white rounded hover:bg-[#22c55e]/80 transition-colors"
+                            className="px-3 py-1 bg-green-500 text-white rounded hover:bg-green-600 transition-colors"
                           >
                             Accept
                           </button>
@@ -1244,11 +1264,11 @@ export default function Dashboard() {
                           </button>
                         </div>
                       )}
-                      {activeTab === 'sent' && invite.status === 'pending' && (
+                      {activeTab === 'sent' && invite.status === 'pending' && !isProcessing && (
                         <div className="mt-4">
                           <button
                             onClick={() => handleInviteAction(invite.id, 'cancel')}
-                            className="px-3 py-1 bg-gray-700 text-white rounded hover:bg-gray-600 transition-colors"
+                            className="px-3 py-1 bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors"
                           >
                             Cancel
                           </button>

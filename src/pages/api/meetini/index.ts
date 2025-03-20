@@ -78,7 +78,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           data: {
             title: title.trim(),
             status: 'pending',
-            type: 'sent',
+            type: 'sent',  // Explicitly set type to 'sent' for new invitations
             createdBy: token.email,
             location: location?.trim(),
             proposedTimes: proposedTimes.map((time: string) => new Date(time)),
@@ -157,17 +157,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (req.method === 'GET') {
       try {
+        console.log('Fetching invitations for user:', token.email);
+        
         const invitations = await prisma.invitation.findMany({
           where: {
             OR: [
-              { createdBy: token.email },
+              {
+                createdBy: token.email
+              },
               {
                 participants: {
                   some: {
-                    OR: [
-                      { email: token.email },
-                      { phoneNumber: { not: null } } // Include invitations where user is invited by phone
-                    ]
+                    email: token.email
                   }
                 }
               }
@@ -182,7 +183,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         });
 
-        return res.status(200).json(invitations);
+        console.log('Found invitations:', JSON.stringify(invitations, null, 2));
+
+        // Transform the invitations to include the correct type based on the user's perspective
+        const transformedInvitations = invitations.map(invitation => ({
+          ...invitation,
+          type: invitation.createdBy === token.email ? 'sent' : 'received'
+        }));
+
+        console.log('Transformed invitations:', JSON.stringify(transformedInvitations, null, 2));
+
+        return res.status(200).json(transformedInvitations);
       } catch (dbError) {
         console.error('Database error:', dbError);
         return res.status(500).json({ 
