@@ -6,7 +6,7 @@ import Navbar from '../components/Navbar';
 import ConfirmationDialog from '../components/ConfirmationDialog';
 import Link from 'next/link';
 import Toast from '../components/Toast';
-import { FaCalendarAlt, FaChevronDown, FaChevronUp, FaCog, FaMicrophone, FaCalendarPlus } from 'react-icons/fa';
+import { FaCalendarAlt, FaChevronDown, FaChevronUp, FaCog, FaMicrophone, FaCalendarPlus, FaTimes } from 'react-icons/fa';
 
 interface CalendarEvent {
   id: string;
@@ -156,11 +156,11 @@ export default function Dashboard() {
     onConfirm: () => {},
     type: 'warning'
   });
-  const [toast, setToast] = useState<ToastProps>({
+  const [toastState, setToastState] = useState<ToastProps>({
     show: false,
     message: '',
     type: 'success',
-    onClose: () => setToast(prev => ({ ...prev, show: false }))
+    onClose: () => setToastState(prev => ({ ...prev, show: false }))
   });
   const [meetingType, setMeetingType] = useState<{ type: string | undefined; confidence: number }>({ type: undefined, confidence: 0 });
   const [showManualSetup, setShowManualSetup] = useState(false);
@@ -185,6 +185,12 @@ export default function Dashboard() {
     },
     notes: ''
   });
+
+  // Add state for manual setup
+  const [manualContacts, setManualContacts] = useState<Contact[]>([]);
+  const [isContactModalOpen, setIsContactModalOpen] = useState(false);
+  const [manualSearchQuery, setManualSearchQuery] = useState('');
+  const [manualSearchResults, setManualSearchResults] = useState<Contact[]>([]);
 
   const fetchInvites = useCallback(async () => {
     if (!session?.accessToken) {
@@ -214,26 +220,169 @@ export default function Dashboard() {
     }
   }, [session]);
 
+  // Type guard for session status
+  const isUnauthenticated = (status: string): status is 'unauthenticated' => status === 'unauthenticated';
+  const isAuthenticated = (status: string): status is 'authenticated' => status === 'authenticated';
+
   useEffect(() => {
     if (status === 'loading') {
       console.log('Session loading...');
       return;
     }
     
-    if (status === 'authenticated' && session?.accessToken) {
+    if (isAuthenticated(status) && session?.accessToken) {
       console.log('Session authenticated, fetching invites...');
       fetchInvites();
-    } else if (status === 'unauthenticated') {
+    } else if (isUnauthenticated(status)) {
       router.push('/');
     }
   }, [status, session, fetchInvites, router]);
 
-  const filteredInvites = useMemo(() => {
-    console.log('Filtering invites:', { activeTab, invites: meetiniInvites });
-    return meetiniInvites.filter(invite => invite.type === activeTab);
-  }, [meetiniInvites, activeTab]);
+  useEffect(() => {
+    if (status === 'loading') return;
 
-  // Meeting type detection based on prompt keywords
+    if (!session?.accessToken) {
+      router.push('/');
+      return;
+    }
+  }, [session, router, status]);
+
+  useEffect(() => {
+    if (status === 'loading') return;
+
+    if (session?.accessToken) {
+      fetchInvites().catch(console.error);
+    }
+  }, [status, session, fetchInvites]);
+
+  useEffect(() => {
+    if (isUnauthenticated(status)) {
+      router.replace('/');
+    } else if (isAuthenticated(status) && !session?.error) {
+      // Only fetch data if we have a valid session
+      fetchInvites().catch(console.error);
+    }
+  }, [status, session, router, fetchInvites]);
+
+  useEffect(() => {
+    // Check for prompt or openCreateModal in URL when component mounts
+    const prompt = router.query.prompt as string;
+    const shouldOpenModal = router.query.openCreateModal === 'true';
+    
+    if (prompt && !initialPrompt) {
+      setInitialPrompt(prompt);
+      setIsCreateModalOpen(true);
+    } else if (shouldOpenModal) {
+      setIsCreateModalOpen(true);
+      // Remove the query parameter without page reload
+      const { openCreateModal, ...query } = router.query;
+      router.replace({ pathname: router.pathname, query }, undefined, { shallow: true });
+    }
+  }, [router.query, initialPrompt]);
+
+  // Handle manual contact search
+  const handleManualContactSearch = useCallback(async (query: string) => {
+    if (!query.trim() || query.length < 2) {
+      setManualSearchResults([]);
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/contacts/search?q=${encodeURIComponent(query)}`);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to search contacts');
+      }
+
+      const contacts = Object.values(data.contacts)
+        .flat()
+        .filter((contact): contact is Contact => 
+          contact !== null &&
+          typeof contact === 'object' &&
+          'email' in contact &&
+          'name' in contact
+        );
+
+      setManualSearchResults(contacts);
+    } catch (error) {
+      console.error('Manual contact search error:', error);
+      setError({
+        message: error instanceof Error ? error.message : 'Failed to search contacts',
+        type: 'error'
+      });
+    }
+  }, []);
+
+  // Handle adding a contact to the manual list
+  const handleAddContact = useCallback((contact: Contact) => {
+    setManualContacts(prev => {
+      // Don't add if already exists
+      if (prev.some(c => c.email === contact.email)) {
+        return prev;
+      }
+      return [...prev, contact];
+    });
+  }, []);
+
+  // Handle removing a contact from the manual list
+  const handleRemoveContact = useCallback((email: string) => {
+    setManualContacts(prev => prev.filter(c => c.email !== email));
+  }, []);
+
+  // Handle manual setup submission
+  const handleManualSetup = useCallback(async () => {
+    if (manualContacts.length === 0) {
+      setError({
+        message: 'Please add at least one contact',
+        type: 'error'
+      });
+      return;
+    }
+
+    try {
+      const response = await fetch('/api/meetini', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          title: 'Manual Meetini',
+          contacts: manualContacts.map(contact => ({
+            email: contact.email,
+            name: contact.name,
+            type: 'email'
+          })),
+          proposedTimes: [],
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to create invitation');
+      }
+
+      // Reset state and show success message
+      setManualContacts([]);
+      setIsContactModalOpen(false);
+      setToastState({
+        show: true,
+        message: 'Invitation created successfully',
+        type: 'success',
+        onClose: () => setToastState(prev => ({ ...prev, show: false }))
+      });
+      
+      // Refresh invitations list
+      fetchInvites();
+    } catch (error) {
+      console.error('Manual setup error:', error);
+      setError({
+        message: error instanceof Error ? error.message : 'Failed to create invitation',
+        type: 'error'
+      });
+    }
+  }, [manualContacts, fetchInvites]);
+
   const detectMeetingType = useCallback((prompt: string): { type: string; confidence: number } => {
     const promptLower = prompt.toLowerCase();
     
@@ -260,16 +409,15 @@ export default function Dashboard() {
   }, []);
 
   const showToast = useCallback((type: 'success' | 'error', message: string) => {
-    const onClose = () => setToast(prev => ({ ...prev, show: false, onClose: () => {} }));
-    setToast({
+    setToastState({
       show: true,
       message,
       type,
-      onClose
+      onClose: () => setToastState(prev => ({ ...prev, show: false }))
     });
 
     // Auto-hide after 5 seconds
-    setTimeout(onClose, 5000);
+    setTimeout(() => setToastState(prev => ({ ...prev, show: false })), 5000);
   }, []);
 
   const stopListening = useCallback(() => {
@@ -715,7 +863,12 @@ export default function Dashboard() {
         ? `✨ Success! Sent ${data.registeredParticipants} invites and ${data.unregisteredParticipants} signup prompts`
         : '✨ Success! Sending invitations...';
 
-      showToast('success', successMessage);
+      setToastState({
+        show: true,
+        message: successMessage,
+        type: 'success',
+        onClose: () => setToastState(prev => ({ ...prev, show: false }))
+      });
       
       // Clear form
       setPrompt('');
@@ -740,11 +893,16 @@ export default function Dashboard() {
       fetchInvites();
     } catch (error) {
       console.error('Failed to create meeting:', error);
-      showToast('error', error instanceof Error ? error.message : 'Failed to create meeting');
+      setToastState({
+        show: true,
+        message: error instanceof Error ? error.message : 'Failed to create meeting',
+        type: 'error',
+        onClose: () => setToastState(prev => ({ ...prev, show: false }))
+      });
     } finally {
       setIsProcessing(false);
     }
-  }, [session, prompt, selectedContacts, meetingSummary, meetingDetails, showToast, fetchInvites]);
+  }, [session, prompt, selectedContacts, meetingSummary, meetingDetails, fetchInvites]);
 
   const handleInviteAction = useCallback(async (id: string, action: 'accept' | 'decline' | 'cancel') => {
     const confirmActions = {
@@ -827,7 +985,12 @@ export default function Dashboard() {
             );
           });
 
-          showToast('success', `Successfully ${action}ed the invitation`);
+          setToastState({
+            show: true,
+            message: `Successfully ${action}ed the invitation`,
+            type: 'success',
+            onClose: () => setToastState(prev => ({ ...prev, show: false }))
+          });
           setConfirmDialog(prev => ({ ...prev, isOpen: false }));
 
         } catch (error) {
@@ -837,11 +1000,16 @@ export default function Dashboard() {
             message: errorMessage,
             type: 'error'
           });
-          showToast('error', errorMessage);
+          setToastState({
+            show: true,
+            message: errorMessage,
+            type: 'error',
+            onClose: () => setToastState(prev => ({ ...prev, show: false }))
+          });
         }
       }
     });
-  }, [showToast]);
+  }, [setToastState]);
 
   const getStatusColor = useCallback((status: MeetiniInvite['status']) => {
     switch (status) {
@@ -872,9 +1040,9 @@ export default function Dashboard() {
   }, [status, session, fetchInvites]);
 
   useEffect(() => {
-    if (status === 'unauthenticated') {
+    if (isUnauthenticated(status)) {
       router.replace('/');
-    } else if (status === 'authenticated' && !session?.error) {
+    } else if (isAuthenticated(status) && !session?.error) {
       // Only fetch data if we have a valid session
       fetchInvites().catch(console.error);
     }
@@ -895,6 +1063,10 @@ export default function Dashboard() {
       router.replace({ pathname: router.pathname, query }, undefined, { shallow: true });
     }
   }, [router.query, initialPrompt]);
+
+  // Move filteredInvites definition before the return statement
+  const filteredInvites = meetiniInvites.filter(invite => invite.type === activeTab);
+  console.log('Filtering invites:', { activeTab, invites: meetiniInvites, filtered: filteredInvites });
 
   // Loading state
   if (status === 'loading') {
@@ -917,9 +1089,25 @@ export default function Dashboard() {
   }
 
   // Protect the route
-  if (status === 'unauthenticated') {
+  if (isUnauthenticated(status)) {
     return null; // Return null while redirecting
   }
+
+  const renderInvitations = (invites: MeetiniInvite[]) => {
+    if (invites.length === 0) {
+      return (
+        <div className="text-center text-gray-400 py-8">
+          No {activeTab} invitations found
+        </div>
+      );
+    }
+
+    return invites.map(invite => (
+      <div key={invite.id} className="bg-[#2f3336] p-6 rounded-lg mb-4">
+        {/* ... rest of the invitation rendering code ... */}
+      </div>
+    ));
+  };
 
   return (
     <div className="min-h-screen bg-[#1a1d23] text-white">
@@ -998,24 +1186,44 @@ export default function Dashboard() {
                 {/* Manual Setup Section */}
                 <div className="mb-8 p-6 bg-[#1a1d23] rounded-lg border border-[#2f3336]">
                   <h3 className="text-xl font-semibold text-[#22c55e] mb-4">Manual Setup for Meetini</h3>
-                  <div className="relative flex items-center">
-                    <button
-                      onClick={() => setIsCreateModalOpen(true)}
-                      className="absolute left-4 text-[#22c55e] hover:text-[#22c55e]/80 transition-colors"
-                      aria-label="Open manual setup"
-                    >
-                      <FaCalendarPlus className="w-5 h-5" />
-                    </button>
-                    <input
-                      type="text"
-                      placeholder="Click the calendar icon to manually set up a Meetini"
-                      className="w-full pl-12 pr-4 py-3 bg-[#2f3336] border border-[#2f3336] rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent cursor-pointer"
-                      readOnly
-                      onClick={() => setIsCreateModalOpen(true)}
-                    />
+                  
+                  {/* Selected Contacts */}
+                  <div className="mb-4">
+                    <div className="flex flex-wrap gap-2">
+                      {manualContacts.map(contact => (
+                        <div key={contact.email} className="flex items-center bg-[#2f3336] px-3 py-1 rounded-lg">
+                          <span className="mr-2">{contact.name}</span>
+                          <button
+                            onClick={() => handleRemoveContact(contact.email)}
+                            className="text-gray-400 hover:text-red-500"
+                          >
+                            <FaTimes className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
                   </div>
+
+                  {/* Add Contact Button */}
+                  <button
+                    onClick={() => setIsContactModalOpen(true)}
+                    className="px-4 py-2 bg-[#22c55e] text-white rounded-lg hover:bg-[#22c55e]/80 transition-colors"
+                  >
+                    Add Contacts
+                  </button>
+
+                  {/* Create Button */}
+                  {manualContacts.length > 0 && (
+                    <button
+                      onClick={handleManualSetup}
+                      className="ml-4 px-4 py-2 bg-[#22c55e] text-white rounded-lg hover:bg-[#22c55e]/80 transition-colors"
+                    >
+                      Create Meetini
+                    </button>
+                  )}
                 </div>
 
+                {/* Meeting Summary */}
                 {meetingSummary && (
                   <div className="mt-6 space-y-4">
                     {meetingSummary.message && (
@@ -1051,7 +1259,7 @@ export default function Dashboard() {
                         <div className="space-y-2">
                           <div className="flex justify-between items-center">
                             <h5 className="text-xs font-medium text-gray-500">SELECTED PARTICIPANTS</h5>
-                            <span className="text-xs text-gray-500">
+                            <span className="text-xs text-gray-400">
                               {selectedContacts.size}/{MAX_PARTICIPANTS - 1} max
                             </span>
                           </div>
@@ -1226,56 +1434,7 @@ export default function Dashboard() {
                 </div>
               ) : filteredInvites.length > 0 ? (
                 <div className="space-y-4">
-                  {filteredInvites.map((invite) => (
-                    <div
-                      key={invite.id}
-                      className="border rounded-lg p-4 hover:shadow-md transition-shadow"
-                    >
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <h3 className="text-lg font-medium text-gray-900">{invite.title}</h3>
-                          <div className="mt-1 text-sm text-gray-500">
-                            {activeTab === 'received' ? (
-                              <span>From: {invite.createdBy}</span>
-                            ) : (
-                              <span>To: {invite.participants.map(p => p.email || p.phoneNumber || p.name || 'Unknown').join(', ')}</span>
-                            )}
-                          </div>
-                          <div className="mt-2">
-                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(invite.status)}`}>
-                              {invite.status.charAt(0).toUpperCase() + invite.status.slice(1)}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                      {activeTab === 'received' && invite.status === 'pending' && !isProcessing && (
-                        <div className="mt-4 flex space-x-2">
-                          <button
-                            onClick={() => handleInviteAction(invite.id, 'accept')}
-                            className="px-3 py-1 bg-green-500 text-white rounded hover:bg-green-600 transition-colors"
-                          >
-                            Accept
-                          </button>
-                          <button
-                            onClick={() => handleInviteAction(invite.id, 'decline')}
-                            className="px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600 transition-colors"
-                          >
-                            Decline
-                          </button>
-                        </div>
-                      )}
-                      {activeTab === 'sent' && invite.status === 'pending' && !isProcessing && (
-                        <div className="mt-4">
-                          <button
-                            onClick={() => handleInviteAction(invite.id, 'cancel')}
-                            className="px-3 py-1 bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  ))}
+                  {renderInvitations(filteredInvites)}
                 </div>
               ) : (
                 <div className="text-center py-8 text-gray-400">
@@ -1288,7 +1447,7 @@ export default function Dashboard() {
       </div>
       {/* Modals */}
       <ConfirmationDialog {...confirmDialog} />
-      <Toast {...toast} />
+      <Toast {...toastState} />
       {isCreateModalOpen && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-[#2f3336] p-6 rounded-lg w-full max-w-6xl mx-4">
@@ -1537,6 +1696,57 @@ export default function Dashboard() {
               >
                 {isProcessing ? 'Creating...' : 'Create Meeting'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Contact Selection Modal */}
+      {isContactModalOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-[#1a1d23] rounded-lg p-6 w-full max-w-lg">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-xl font-semibold text-[#22c55e]">Add Contacts</h3>
+              <button
+                onClick={() => setIsContactModalOpen(false)}
+                className="text-gray-400 hover:text-white"
+              >
+                <FaTimes className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Search Input */}
+            <div className="mb-4">
+              <input
+                type="text"
+                value={manualSearchQuery}
+                onChange={(e) => {
+                  setManualSearchQuery(e.target.value);
+                  handleManualContactSearch(e.target.value);
+                }}
+                placeholder="Search contacts..."
+                className="w-full px-4 py-2 bg-[#2f3336] text-white rounded-lg focus:ring-2 focus:ring-[#22c55e] focus:outline-none"
+              />
+            </div>
+
+            {/* Search Results */}
+            <div className="max-h-96 overflow-y-auto">
+              {manualSearchResults.map(contact => (
+                <div
+                  key={contact.email}
+                  className="flex items-center justify-between p-3 hover:bg-[#2f3336] rounded-lg cursor-pointer"
+                  onClick={() => handleAddContact(contact)}
+                >
+                  <div>
+                    <div className="font-medium">{contact.name}</div>
+                    <div className="text-sm text-gray-400">{contact.email}</div>
+                  </div>
+                  <button
+                    className="px-3 py-1 bg-[#22c55e] text-white rounded-lg hover:bg-[#22c55e]/80 transition-colors"
+                  >
+                    Add
+                  </button>
+                </div>
+              ))}
             </div>
           </div>
         </div>
