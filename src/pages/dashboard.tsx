@@ -188,9 +188,18 @@ export default function Dashboard() {
 
   // Add state for manual setup
   const [manualContacts, setManualContacts] = useState<Contact[]>([]);
-  const [isContactModalOpen, setIsContactModalOpen] = useState(false);
   const [manualSearchQuery, setManualSearchQuery] = useState('');
   const [manualSearchResults, setManualSearchResults] = useState<Contact[]>([]);
+  const [manualMeetingDetails, setManualMeetingDetails] = useState({
+    title: '',
+    location: '',
+    proposedTimes: [] as string[],
+    preferences: {
+      timePreference: '',
+      durationType: '',
+      locationType: ''
+    }
+  });
 
   const fetchInvites = useCallback(async () => {
     if (!session?.accessToken) {
@@ -340,6 +349,14 @@ export default function Dashboard() {
       return;
     }
 
+    if (!manualMeetingDetails.title) {
+      setError({
+        message: 'Please enter a title for the meeting',
+        type: 'error'
+      });
+      return;
+    }
+
     try {
       const response = await fetch('/api/meetini', {
         method: 'POST',
@@ -347,13 +364,15 @@ export default function Dashboard() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          title: 'Manual Meetini',
+          title: manualMeetingDetails.title,
+          location: manualMeetingDetails.location,
           contacts: manualContacts.map(contact => ({
             email: contact.email,
             name: contact.name,
             type: 'email'
           })),
-          proposedTimes: [],
+          proposedTimes: manualMeetingDetails.proposedTimes,
+          preferences: manualMeetingDetails.preferences
         }),
       });
 
@@ -364,10 +383,20 @@ export default function Dashboard() {
 
       // Reset state and show success message
       setManualContacts([]);
-      setIsContactModalOpen(false);
+      setManualMeetingDetails({
+        title: '',
+        location: '',
+        proposedTimes: [],
+        preferences: {
+          timePreference: '',
+          durationType: '',
+          locationType: ''
+        }
+      });
+      setIsCreateModalOpen(false);
       setToastState({
         show: true,
-        message: 'Invitation created successfully',
+        message: 'Meetini created successfully',
         type: 'success',
         onClose: () => setToastState(prev => ({ ...prev, show: false }))
       });
@@ -381,7 +410,7 @@ export default function Dashboard() {
         type: 'error'
       });
     }
-  }, [manualContacts, fetchInvites]);
+  }, [manualContacts, manualMeetingDetails, fetchInvites]);
 
   const detectMeetingType = useCallback((prompt: string): { type: string; confidence: number } => {
     const promptLower = prompt.toLowerCase();
@@ -1206,7 +1235,7 @@ export default function Dashboard() {
 
                   {/* Add Contact Button */}
                   <button
-                    onClick={() => setIsContactModalOpen(true)}
+                    onClick={() => setIsCreateModalOpen(true)}
                     className="px-4 py-2 bg-[#22c55e] text-white rounded-lg hover:bg-[#22c55e]/80 transition-colors"
                   >
                     Add Contacts
@@ -1450,303 +1479,111 @@ export default function Dashboard() {
       <Toast {...toastState} />
       {isCreateModalOpen && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-[#2f3336] p-6 rounded-lg w-full max-w-6xl mx-4">
-            <h2 className="text-2xl font-bold text-[#22c55e] mb-6">Create New Meetini</h2>
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-8 gap-y-6">
-              {/* Left Column */}
-              <div className="space-y-5">
-                {/* Participants */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-400 mb-2">
-                    Participants
-                  </label>
-                  <div className="space-y-2 max-h-[180px] overflow-y-auto">
-                    {selectedContacts.size > 0 ? (
-                      Array.from(selectedContacts).map(email => (
-                        <div key={email} className="flex items-center justify-between p-3 bg-[#1a1d23] rounded-lg">
-                          <span className="text-white">{email}</span>
-                          <button
-                            onClick={() => toggleContactSelection(email)}
-                            className="text-red-500 hover:text-red-400"
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      ))
-                    ) : (
-                      <div className="text-gray-500 text-center p-4">
-                        No participants selected
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Add Participant */}
-                <div>
-                  <label htmlFor="addParticipant" className="block text-sm font-medium text-gray-400 mb-2">
-                    Add Participant
-                  </label>
-                  <input
-                    type="email"
-                    id="addParticipant"
-                    placeholder="Enter email address"
-                    className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent"
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        const email = e.currentTarget.value.trim();
-                        if (email && email.includes('@')) {
-                          toggleContactSelection(email);
-                          e.currentTarget.value = '';
-                        }
-                      }
-                    }}
-                  />
-                </div>
-
-                {/* Meeting Title */}
-                <div>
-                  <label htmlFor="meetingTitle" className="block text-sm font-medium text-gray-400 mb-2">
-                    Meeting Title
-                  </label>
-                  <input
-                    type="text"
-                    id="meetingTitle"
-                    placeholder="Enter meeting title"
-                    className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent"
-                    value={prompt}
-                    onChange={(e) => setPrompt(e.target.value)}
-                  />
-                </div>
-
-                {/* Date and Time */}
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label htmlFor="startDate" className="block text-sm font-medium text-gray-400 mb-2">
-                      Date
-                    </label>
-                    <input
-                      type="date"
-                      id="startDate"
-                      className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent"
-                      value={meetingDetails.startDate}
-                      onChange={(e) => setMeetingDetails(prev => ({ ...prev, startDate: e.target.value }))}
-                      min={new Date().toISOString().split('T')[0]}
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="startTime" className="block text-sm font-medium text-gray-400 mb-2">
-                      Time
-                    </label>
-                    <input
-                      type="time"
-                      id="startTime"
-                      className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent"
-                      value={meetingDetails.startTime}
-                      onChange={(e) => setMeetingDetails(prev => ({ ...prev, startTime: e.target.value }))}
-                    />
-                  </div>
-                </div>
-
-                {/* Duration */}
-                <div>
-                  <label htmlFor="duration" className="block text-sm font-medium text-gray-400 mb-2">
-                    Duration (minutes)
-                  </label>
-                  <select
-                    id="duration"
-                    className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent"
-                    value={meetingDetails.duration}
-                    onChange={(e) => setMeetingDetails(prev => ({ ...prev, duration: parseInt(e.target.value) }))}
-                  >
-                    <option value="15">15 minutes</option>
-                    <option value="30">30 minutes</option>
-                    <option value="45">45 minutes</option>
-                    <option value="60">1 hour</option>
-                    <option value="90">1.5 hours</option>
-                    <option value="120">2 hours</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Right Column */}
-              <div className="space-y-5">
-                {/* Priority */}
-                <div>
-                  <label htmlFor="priority" className="block text-sm font-medium text-gray-400 mb-2">
-                    Priority (1-10, higher is more urgent)
-                  </label>
-                  <div className="flex items-center space-x-4">
-                    <input
-                      type="range"
-                      id="priority"
-                      min="1"
-                      max="10"
-                      step="1"
-                      className="w-full h-2 bg-[#1a1d23] rounded-lg appearance-none cursor-pointer accent-[#22c55e]"
-                      value={meetingDetails.priority}
-                      onChange={(e) => setMeetingDetails(prev => ({ ...prev, priority: parseInt(e.target.value) }))}
-                    />
-                    <span className="text-white font-medium w-8 text-center">
-                      {meetingDetails.priority}
-                    </span>
-                  </div>
-                  <div className="mt-1 flex justify-between text-xs text-gray-400">
-                    <span>Low Priority</span>
-                    <span>ASAP</span>
-                  </div>
-                </div>
-
-                {/* Location */}
-                <div>
-                  <label htmlFor="location" className="block text-sm font-medium text-gray-400 mb-2">
-                    Location (optional)
-                  </label>
-                  <input
-                    type="text"
-                    id="location"
-                    placeholder="Enter location or leave blank for virtual"
-                    className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent"
-                    value={meetingDetails.location}
-                    onChange={(e) => setMeetingDetails(prev => ({ ...prev, location: e.target.value }))}
-                  />
-                </div>
-
-                {/* Meeting Preferences */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-400 mb-2">
-                    Meeting Preferences
-                  </label>
-                  <div className="flex flex-wrap gap-3">
-                    <button
-                      onClick={() => setMeetingDetails(prev => ({
-                        ...prev,
-                        preferences: { ...prev.preferences, virtual: !prev.preferences.virtual }
-                      }))}
-                      className={`px-4 py-2 rounded-lg transition-colors ${
-                        meetingDetails.preferences.virtual
-                          ? 'bg-[#22c55e] text-white'
-                          : 'bg-[#1a1d23] text-gray-400 hover:bg-[#1a1d23]/80'
-                      }`}
-                    >
-                      Virtual
-                    </button>
-                    <button
-                      onClick={() => setMeetingDetails(prev => ({
-                        ...prev,
-                        preferences: { ...prev.preferences, inPerson: !prev.preferences.inPerson }
-                      }))}
-                      className={`px-4 py-2 rounded-lg transition-colors ${
-                        meetingDetails.preferences.inPerson
-                          ? 'bg-[#22c55e] text-white'
-                          : 'bg-[#1a1d23] text-gray-400 hover:bg-[#1a1d23]/80'
-                      }`}
-                    >
-                      In Person
-                    </button>
-                    <button
-                      onClick={() => setMeetingDetails(prev => ({
-                        ...prev,
-                        preferences: { ...prev.preferences, flexible: !prev.preferences.flexible }
-                      }))}
-                      className={`px-4 py-2 rounded-lg transition-colors ${
-                        meetingDetails.preferences.flexible
-                          ? 'bg-[#22c55e] text-white'
-                          : 'bg-[#1a1d23] text-gray-400 hover:bg-[#1a1d23]/80'
-                      }`}
-                    >
-                      Flexible
-                    </button>
-                  </div>
-                </div>
-
-                {/* Notes */}
-                <div>
-                  <label htmlFor="notes" className="block text-sm font-medium text-gray-400 mb-2">
-                    Notes (optional)
-                  </label>
-                  <textarea
-                    id="notes"
-                    placeholder="Add any additional notes or context"
-                    className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent"
-                    rows={4}
-                    value={meetingDetails.notes}
-                    onChange={(e) => setMeetingDetails(prev => ({ ...prev, notes: e.target.value }))}
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Actions */}
-            <div className="flex justify-end space-x-4 pt-6 mt-6 border-t border-[#1a1d23]">
+          <div className="bg-[#2f3336] p-6 rounded-lg w-full max-w-2xl mx-4">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-2xl font-bold text-[#22c55e]">Manual Meetini Setup</h2>
               <button
                 onClick={() => setIsCreateModalOpen(false)}
-                className="px-4 py-2 text-gray-400 hover:text-white transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={createMeetini}
-                disabled={isProcessing || selectedContacts.size === 0}
-                className={`px-6 py-2 rounded-lg font-medium transition-colors ${
-                  isProcessing || selectedContacts.size === 0
-                    ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
-                    : 'bg-[#22c55e] hover:bg-[#22c55e]/80 text-white'
-                }`}
-              >
-                {isProcessing ? 'Creating...' : 'Create Meeting'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-      {/* Contact Selection Modal */}
-      {isContactModalOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-[#1a1d23] rounded-lg p-6 w-full max-w-lg">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-xl font-semibold text-[#22c55e]">Add Contacts</h3>
-              <button
-                onClick={() => setIsContactModalOpen(false)}
-                className="text-gray-400 hover:text-white"
+                className="text-gray-400 hover:text-white transition-colors"
               >
                 <FaTimes className="w-5 h-5" />
               </button>
             </div>
 
-            {/* Search Input */}
-            <div className="mb-4">
-              <input
-                type="text"
-                value={manualSearchQuery}
-                onChange={(e) => {
-                  setManualSearchQuery(e.target.value);
-                  handleManualContactSearch(e.target.value);
-                }}
-                placeholder="Search contacts..."
-                className="w-full px-4 py-2 bg-[#2f3336] text-white rounded-lg focus:ring-2 focus:ring-[#22c55e] focus:outline-none"
-              />
-            </div>
+            <div className="space-y-6">
+              {/* Title */}
+              <div>
+                <label className="block text-sm font-medium text-gray-400 mb-2">
+                  Title
+                </label>
+                <input
+                  type="text"
+                  value={manualMeetingDetails.title}
+                  onChange={(e) => setManualMeetingDetails(prev => ({ ...prev, title: e.target.value }))}
+                  placeholder="Enter meeting title"
+                  className="w-full px-4 py-2 bg-[#1a1d23] text-white rounded-lg focus:ring-2 focus:ring-[#22c55e] focus:outline-none"
+                />
+              </div>
 
-            {/* Search Results */}
-            <div className="max-h-96 overflow-y-auto">
-              {manualSearchResults.map(contact => (
-                <div
-                  key={contact.email}
-                  className="flex items-center justify-between p-3 hover:bg-[#2f3336] rounded-lg cursor-pointer"
-                  onClick={() => handleAddContact(contact)}
-                >
-                  <div>
-                    <div className="font-medium">{contact.name}</div>
-                    <div className="text-sm text-gray-400">{contact.email}</div>
-                  </div>
-                  <button
-                    className="px-3 py-1 bg-[#22c55e] text-white rounded-lg hover:bg-[#22c55e]/80 transition-colors"
-                  >
-                    Add
-                  </button>
+              {/* Location */}
+              <div>
+                <label className="block text-sm font-medium text-gray-400 mb-2">
+                  Location (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={manualMeetingDetails.location}
+                  onChange={(e) => setManualMeetingDetails(prev => ({ ...prev, location: e.target.value }))}
+                  placeholder="Enter meeting location"
+                  className="w-full px-4 py-2 bg-[#1a1d23] text-white rounded-lg focus:ring-2 focus:ring-[#22c55e] focus:outline-none"
+                />
+              </div>
+
+              {/* Contacts */}
+              <div>
+                <label className="block text-sm font-medium text-gray-400 mb-2">
+                  Contacts
+                </label>
+                <div className="flex flex-wrap gap-2 mb-2">
+                  {manualContacts.map(contact => (
+                    <div key={contact.email} className="flex items-center bg-[#1a1d23] px-3 py-1 rounded-lg">
+                      <span className="mr-2">{contact.name}</span>
+                      <button
+                        onClick={() => handleRemoveContact(contact.email)}
+                        className="text-gray-400 hover:text-red-500"
+                      >
+                        <FaTimes className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
                 </div>
-              ))}
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={manualSearchQuery}
+                    onChange={(e) => {
+                      setManualSearchQuery(e.target.value);
+                      handleManualContactSearch(e.target.value);
+                    }}
+                    placeholder="Search contacts..."
+                    className="flex-1 px-4 py-2 bg-[#1a1d23] text-white rounded-lg focus:ring-2 focus:ring-[#22c55e] focus:outline-none"
+                  />
+                </div>
+                {manualSearchResults.length > 0 && (
+                  <div className="mt-2 max-h-40 overflow-y-auto bg-[#1a1d23] rounded-lg">
+                    {manualSearchResults.map(contact => (
+                      <div
+                        key={contact.email}
+                        className="flex items-center justify-between p-2 hover:bg-[#2f3336] cursor-pointer"
+                        onClick={() => handleAddContact(contact)}
+                      >
+                        <div>
+                          <div className="font-medium text-white">{contact.name}</div>
+                          <div className="text-sm text-gray-400">{contact.email}</div>
+                        </div>
+                        <button className="px-2 py-1 text-sm bg-[#22c55e] text-white rounded hover:bg-[#22c55e]/80">
+                          Add
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Create Button */}
+              <div className="flex justify-end pt-4">
+                <button
+                  onClick={handleManualSetup}
+                  disabled={manualContacts.length === 0 || !manualMeetingDetails.title}
+                  className={`px-4 py-2 rounded-lg ${
+                    manualContacts.length === 0 || !manualMeetingDetails.title
+                      ? 'bg-gray-500 cursor-not-allowed'
+                      : 'bg-[#22c55e] hover:bg-[#22c55e]/80'
+                  } text-white transition-colors`}
+                >
+                  Create Meetini
+                </button>
+              </div>
             </div>
           </div>
         </div>
