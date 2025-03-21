@@ -224,14 +224,63 @@ CREATE TABLE "Group" (
 -- CreateTable
 CREATE TABLE "Contact" (
     "id" TEXT NOT NULL,
-    "type" TEXT NOT NULL,
-    "value" TEXT NOT NULL,
-    "name" TEXT,
     "userId" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
+    "email" TEXT NOT NULL,
+    "source" TEXT NOT NULL,
+    "confidence" DOUBLE PRECISION NOT NULL,
+    "lastContact" TIMESTAMP(3),
+    "reason" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
     CONSTRAINT "Contact_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "ContactHistory" (
+    "id" TEXT NOT NULL,
+    "contactId" TEXT NOT NULL,
+    "type" TEXT NOT NULL,
+    "timestamp" TIMESTAMP(3) NOT NULL,
+    "details" JSONB,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "ContactHistory_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "MeetingPreferences" (
+    "id" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "locationPreferences" TEXT NOT NULL,
+    "virtualMeetings" TEXT NOT NULL,
+    "schedulingRules" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "MeetingPreferences_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "user_preferences" (
+    "id" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "workingHours" JSONB NOT NULL,
+    "workDays" INTEGER[],
+    "timezone" TEXT NOT NULL,
+    "meetingTypes" TEXT[],
+    "virtualPlatforms" TEXT[],
+    "nonWorkingHours" JSONB[],
+    "meetingBuffers" JSONB NOT NULL,
+    "meetingDurations" JSONB NOT NULL,
+    "videoLinks" JSONB[],
+    "meetingLocations" JSONB[],
+    "defaultSettings" JSONB NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "user_preferences_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -302,7 +351,19 @@ CREATE INDEX "Group_userId_idx" ON "Group"("userId");
 CREATE INDEX "Contact_userId_idx" ON "Contact"("userId");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "Contact_userId_type_value_key" ON "Contact"("userId", "type", "value");
+CREATE INDEX "Contact_email_idx" ON "Contact"("email");
+
+-- CreateIndex
+CREATE INDEX "ContactHistory_contactId_idx" ON "ContactHistory"("contactId");
+
+-- CreateIndex
+CREATE INDEX "ContactHistory_timestamp_idx" ON "ContactHistory"("timestamp");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "MeetingPreferences_userId_key" ON "MeetingPreferences"("userId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "user_preferences_userId_key" ON "user_preferences"("userId");
 
 -- CreateIndex
 CREATE INDEX "_ReceivedInvitations_B_index" ON "_ReceivedInvitations"("B");
@@ -363,6 +424,15 @@ ALTER TABLE "Group" ADD CONSTRAINT "Group_userId_fkey" FOREIGN KEY ("userId") RE
 
 -- AddForeignKey
 ALTER TABLE "Contact" ADD CONSTRAINT "Contact_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ContactHistory" ADD CONSTRAINT "ContactHistory_contactId_fkey" FOREIGN KEY ("contactId") REFERENCES "Contact"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "MeetingPreferences" ADD CONSTRAINT "MeetingPreferences_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "user_preferences" ADD CONSTRAINT "user_preferences_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "_ReceivedInvitations" ADD CONSTRAINT "_ReceivedInvitations_A_fkey" FOREIGN KEY ("A") REFERENCES "Invitation"("id") ON DELETE CASCADE ON UPDATE CASCADE;

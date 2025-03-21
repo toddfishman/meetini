@@ -7,6 +7,10 @@ import ConfirmationDialog from '../components/ConfirmationDialog';
 import Link from 'next/link';
 import Toast from '../components/Toast';
 import { FaCalendarAlt, FaChevronDown, FaChevronUp, FaCog, FaMicrophone, FaCalendarPlus, FaTimes } from 'react-icons/fa';
+import UserPreferencesWrapper from '../components/UserPreferencesWrapper';
+import { Box, Button } from '@mui/material';
+import SettingsIcon from '@mui/icons-material/Settings';
+import { UserPreferencesData } from '../types/preferences';
 
 interface CalendarEvent {
   id: string;
@@ -168,6 +172,23 @@ export default function Dashboard() {
   const [isPendingSearch, setIsPendingSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [transcript, setTranscript] = useState('');
+  const [isPreferencesModalOpen, setIsPreferencesModalOpen] = useState(false);
+  const [preferences, setPreferences] = useState<UserPreferencesData>({
+    workingHours: {
+      start: '09:00',
+      end: '17:00',
+    },
+    workDays: [1, 2, 3, 4, 5],
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    meetingTypes: ['Virtual', 'In Person'],
+    virtualPlatforms: ['Zoom', 'Google Meet', 'Microsoft Teams'],
+    emailNotifications: true,
+    smsNotifications: false,
+    defaultDuration: 30,
+    defaultMeetingType: 'virtual',
+  });
+  const [isSaving, setIsSaving] = useState(false);
+  const [preferencesOpen, setPreferencesOpen] = useState(false);
 
   const MAX_PARTICIPANTS = 30;
   const PARTICIPANT_WARNING_THRESHOLD = 20;
@@ -247,6 +268,85 @@ export default function Dashboard() {
       router.push('/');
     }
   }, [status, session, fetchInvites, router]);
+
+  useEffect(() => {
+    if (status === 'loading') return;
+
+    if (!session?.accessToken) {
+      router.push('/');
+      return;
+    }
+  }, [session, router, status]);
+
+  useEffect(() => {
+    if (status === 'loading') return;
+
+    if (session?.accessToken) {
+      fetchInvites().catch(console.error);
+    }
+  }, [status, session, fetchInvites]);
+
+  useEffect(() => {
+    if (isUnauthenticated(status)) {
+      router.replace('/');
+    } else if (isAuthenticated(status) && !session?.error) {
+      // Only fetch data if we have a valid session
+      fetchInvites().catch(console.error);
+    }
+  }, [status, session, router, fetchInvites]);
+
+  useEffect(() => {
+    // Check for prompt or openCreateModal in URL when component mounts
+    const prompt = router.query.prompt as string;
+    const shouldOpenModal = router.query.openCreateModal === 'true';
+    
+    if (prompt && !initialPrompt) {
+      setInitialPrompt(prompt);
+      setIsCreateModalOpen(true);
+    } else if (shouldOpenModal) {
+      setIsCreateModalOpen(true);
+      // Remove the query parameter without page reload
+      const { openCreateModal, ...query } = router.query;
+      router.replace({ pathname: router.pathname, query }, undefined, { shallow: true });
+    }
+  }, [router.query, initialPrompt]);
+
+  useEffect(() => {
+    const fetchPreferences = async () => {
+      if (status !== 'authenticated') {
+        console.log('Not authenticated yet, skipping preferences fetch');
+        return;
+      }
+      
+      try {
+        console.log('Fetching preferences...');
+        const response = await fetch('/api/preferences');
+        console.log('Preferences response status:', response.status);
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('Error response:', errorText);
+          
+          // If not authenticated, redirect to login
+          if (response.status === 401) {
+            console.log('Not authenticated, redirecting to login');
+            router.push('/');
+            return;
+          }
+          
+          throw new Error(`Failed to fetch preferences: ${errorText}`);
+        }
+        
+        const data = await response.json();
+        console.log('Preferences data:', data);
+        setPreferences(data);
+      } catch (error) {
+        console.error('Error fetching preferences:', error);
+      }
+    };
+
+    fetchPreferences();
+  }, [status, router]);
 
   useEffect(() => {
     if (status === 'loading') return;
@@ -893,12 +993,10 @@ export default function Dashboard() {
         }),
       });
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: `Failed to create meeting (${response.status})` }));
-        throw new Error(errorData.error || errorData.message || `Failed to create meeting (${response.status})`);
-      }
-
       const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || `Failed to create meeting (${response.status})`);
+      }
 
       // Show success message
       const successMessage = data.unregisteredParticipants > 0
@@ -1110,6 +1208,86 @@ export default function Dashboard() {
   const filteredInvites = meetiniInvites.filter(invite => invite.type === activeTab);
   console.log('Filtering invites:', { activeTab, invites: meetiniInvites, filtered: filteredInvites });
 
+  const handlePreferenceChange = useCallback((key: keyof UserPreferencesData, value: any) => {
+    setPreferences(prev => ({ ...prev, [key]: value }));
+  }, []);
+
+  const handleWorkDayToggle = useCallback((day: number) => {
+    setPreferences(prev => {
+      const newWorkDays = prev.workDays.includes(day)
+        ? prev.workDays.filter(d => d !== day)
+        : [...prev.workDays, day].sort();
+      return { ...prev, workDays: newWorkDays };
+    });
+  }, []);
+
+  const handleMeetingTypeToggle = useCallback((type: string) => {
+    setPreferences(prev => {
+      const newTypes = prev.meetingTypes.includes(type)
+        ? prev.meetingTypes.filter(t => t !== type)
+        : [...prev.meetingTypes, type];
+      return { ...prev, meetingTypes: newTypes };
+    });
+  }, []);
+
+  const handlePlatformToggle = useCallback((platform: string) => {
+    setPreferences(prev => {
+      const newPlatforms = prev.virtualPlatforms.includes(platform)
+        ? prev.virtualPlatforms.filter(p => p !== platform)
+        : [...prev.virtualPlatforms, platform];
+      return { ...prev, virtualPlatforms: newPlatforms };
+    });
+  }, []);
+
+  const handleSavePreferences = useCallback(async () => {
+    setIsSaving(true);
+    try {
+      const response = await fetch('/api/preferences', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(preferences),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to save preferences');
+      }
+
+      setToastState({
+        show: true,
+        message: 'Preferences saved successfully',
+        type: 'success',
+        onClose: () => setToastState(prev => ({ ...prev, show: false }))
+      });
+    } catch (error) {
+      console.error('Failed to save preferences:', error);
+      setToastState({
+        show: true,
+        message: 'Failed to save preferences',
+        type: 'error',
+        onClose: () => setToastState(prev => ({ ...prev, show: false }))
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  }, [preferences]);
+
+  const resetMeetingDetails = () => {
+    setMeetingDetails({
+      title: '',
+      startDate: new Date().toISOString().split('T')[0],
+      startTime: '09:00',
+      duration: 30,
+      location: '',
+      priority: 5,
+      preferences: {
+        virtual: false,
+        inPerson: false,
+        flexible: false
+      },
+      notes: ''
+    });
+  };
+
   // Loading state
   if (status === 'loading') {
     return (
@@ -1122,7 +1300,7 @@ export default function Dashboard() {
   // Handle session errors
   if (session?.error === 'RefreshAccessTokenError') {
     return (
-      <div className="min-h-screen bg-[#1a1d23] text-white flex items-center justify-center">
+      <div className="min-h-screen bg-[#1a1d23] text-white">
         <div className="text-red-500">
           Session expired. Please sign in again.
         </div>
@@ -1392,19 +1570,9 @@ export default function Dashboard() {
                 <h2 className="text-xl font-bold text-[#22c55e] tracking-tight">Your Calendar</h2>
                 <button
                   onClick={() => setShowCalendar(!showCalendar)}
-                  className="flex items-center space-x-2 text-[#22c55e] hover:text-[#22c55e]/80 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:ring-opacity-50 rounded-lg px-3 py-1.5"
+                  className="text-[#22c55e] hover:text-[#22c55e]/80 transition-colors"
                 >
-                  {showCalendar ? (
-                    <>
-                      <span className="font-medium">Hide Calendar</span>
-                      <FaChevronUp className="w-4 h-4" />
-                    </>
-                  ) : (
-                    <>
-                      <span className="font-medium">Show Calendar</span>
-                      <FaChevronDown className="w-4 h-4" />
-                    </>
-                  )}
+                  {showCalendar ? 'Hide Calendar' : 'Show Calendar'}
                 </button>
               </div>
               
@@ -1421,6 +1589,23 @@ export default function Dashboard() {
                     scrolling="no"
                   />
                 </div>
+              </div>
+            </div>
+
+            {/* Preferences Section */}
+            <div className="bg-[#2f3336] p-6 rounded-lg sticky top-24">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl font-bold text-[#22c55e] tracking-tight">Your Preferences</h2>
+                <Box sx={{ display: 'flex', justifyContent: 'flex-end', p: 2 }}>
+                  <Button
+                    variant="contained"
+                    color="primary"
+                    onClick={() => setPreferencesOpen(true)}
+                    startIcon={<SettingsIcon />}
+                  >
+                    Manage Preferences
+                  </Button>
+                </Box>
               </div>
             </div>
 
@@ -1521,7 +1706,7 @@ export default function Dashboard() {
                         handleManualContactSearch(e.target.value);
                       }}
                       placeholder="Search contacts..."
-                      className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent"
+                      className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#22c55e]"
                     />
                     {manualSearchResults.length > 0 && (
                       <div className="absolute left-0 right-0 mt-1 max-h-40 overflow-y-auto bg-[#1a1d23] rounded-lg border border-[#2f3336] z-10">
@@ -1554,7 +1739,7 @@ export default function Dashboard() {
                     type="text"
                     id="meetingTitle"
                     placeholder="Enter meeting title"
-                    className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent"
+                    className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#22c55e]"
                     value={meetingDetails.title}
                     onChange={(e) => setMeetingDetails(prev => ({ ...prev, title: e.target.value }))}
                   />
@@ -1569,7 +1754,7 @@ export default function Dashboard() {
                     <input
                       type="date"
                       id="startDate"
-                      className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent"
+                      className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-[#22c55e]"
                       value={meetingDetails.startDate}
                       onChange={(e) => setMeetingDetails(prev => ({ ...prev, startDate: e.target.value }))}
                       min={new Date().toISOString().split('T')[0]}
@@ -1582,7 +1767,7 @@ export default function Dashboard() {
                     <input
                       type="time"
                       id="startTime"
-                      className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent"
+                      className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-[#22c55e]"
                       value={meetingDetails.startTime}
                       onChange={(e) => setMeetingDetails(prev => ({ ...prev, startTime: e.target.value }))}
                     />
@@ -1596,7 +1781,7 @@ export default function Dashboard() {
                   </label>
                   <select
                     id="duration"
-                    className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent"
+                    className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-[#22c55e]"
                     value={meetingDetails.duration}
                     onChange={(e) => setMeetingDetails(prev => ({ ...prev, duration: parseInt(e.target.value) }))}
                   >
@@ -1647,7 +1832,7 @@ export default function Dashboard() {
                     type="text"
                     id="location"
                     placeholder="Enter location or leave blank for virtual"
-                    className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent"
+                    className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#22c55e]"
                     value={meetingDetails.location}
                     onChange={(e) => setMeetingDetails(prev => ({ ...prev, location: e.target.value }))}
                   />
@@ -1709,7 +1894,7 @@ export default function Dashboard() {
                   <textarea
                     id="notes"
                     placeholder="Add any additional notes or context"
-                    className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#22c55e] focus:border-transparent"
+                    className="w-full px-4 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#22c55e]"
                     rows={4}
                     value={meetingDetails.notes}
                     onChange={(e) => setMeetingDetails(prev => ({ ...prev, notes: e.target.value }))}
@@ -1741,6 +1926,168 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+      {preferencesOpen && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-[#2f3336] p-6 rounded-lg w-full max-w-4xl mx-4">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-2xl font-bold text-[#22c55e]">Meeting Preferences</h2>
+              <button
+                onClick={() => setPreferencesOpen(false)}
+                className="text-gray-400 hover:text-white transition-colors"
+              >
+                <FaTimes className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-8">
+              {/* Calendar Preferences */}
+              <div>
+                <h3 className="text-lg font-medium text-white mb-4">Calendar Preferences</h3>
+                <div className="space-y-4">
+                  {/* Working Hours */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-400 mb-2">
+                      Working Hours
+                    </label>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs text-gray-500 mb-1">Start Time</label>
+                        <input
+                          type="time"
+                          value={preferences.workingHours.start}
+                          onChange={(e) => handlePreferenceChange('workingHours', { ...preferences.workingHours, start: e.target.value })}
+                          className="w-full px-3 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-[#22c55e]"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-500 mb-1">End Time</label>
+                        <input
+                          type="time"
+                          value={preferences.workingHours.end}
+                          onChange={(e) => handlePreferenceChange('workingHours', { ...preferences.workingHours, end: e.target.value })}
+                          className="w-full px-3 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-[#22c55e]"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Working Days */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-400 mb-2">
+                      Working Days
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      {['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((day, index) => (
+                        <button
+                          key={day}
+                          onClick={() => handleWorkDayToggle(index)}
+                          className={`px-3 py-1 rounded-lg transition-colors ${
+                            preferences.workDays.includes(index)
+                              ? 'bg-[#22c55e] text-white'
+                              : 'bg-[#1a1d23] text-gray-400 hover:bg-[#1a1d23]/80'
+                          }`}
+                        >
+                          {day.slice(0, 3)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Timezone */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-400 mb-2">
+                      Timezone
+                    </label>
+                    <select
+                      value={preferences.timezone}
+                      onChange={(e) => handlePreferenceChange('timezone', e.target.value)}
+                      className="w-full px-3 py-2 bg-[#1a1d23] border border-[#2f3336] rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-[#22c55e]"
+                    >
+                      {Intl.supportedValuesOf('timeZone').map(timezone => (
+                        <option key={timezone} value={timezone}>
+                          {timezone}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              {/* Meeting Preferences */}
+              <div>
+                <h3 className="text-lg font-medium text-white mb-4">Meeting Preferences</h3>
+                <div className="space-y-4">
+                  {/* Location Preferences */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-400 mb-2">
+                      Preferred Meeting Types
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      {['Virtual', 'In Person', 'Flexible'].map(type => (
+                        <button
+                          key={type}
+                          onClick={() => handleMeetingTypeToggle(type)}
+                          className={`px-4 py-2 rounded-lg transition-colors ${
+                            preferences.meetingTypes.includes(type)
+                              ? 'bg-[#22c55e] text-white'
+                              : 'bg-[#1a1d23] text-gray-400 hover:bg-[#1a1d23]/80'
+                          }`}
+                        >
+                          {type}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Virtual Meeting Platforms */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-400 mb-2">
+                      Preferred Virtual Platforms
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      {['Zoom', 'Google Meet', 'Microsoft Teams'].map(platform => (
+                        <button
+                          key={platform}
+                          onClick={() => handlePlatformToggle(platform)}
+                          className={`px-4 py-2 rounded-lg transition-colors ${
+                            preferences.virtualPlatforms.includes(platform)
+                              ? 'bg-[#22c55e] text-white'
+                              : 'bg-[#1a1d23] text-gray-400 hover:bg-[#1a1d23]/80'
+                          }`}
+                        >
+                          {platform}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Save Button */}
+            <div className="flex justify-end mt-8 pt-6 border-t border-[#1a1d23]">
+              <button
+                onClick={handleSavePreferences}
+                disabled={isSaving}
+                className={`px-6 py-2 rounded-lg font-medium transition-colors ${
+                  isSaving
+                    ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
+                    : 'bg-[#22c55e] hover:bg-[#22c55e]/80 text-white'
+                }`}
+              >
+                {isSaving ? 'Saving...' : 'Save Preferences'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      <UserPreferencesWrapper
+        open={preferencesOpen}
+        onClose={() => setPreferencesOpen(false)}
+        preferences={preferences}
+        onPreferenceChange={handlePreferenceChange}
+        onWorkDayToggle={handleWorkDayToggle}
+      />
     </div>
   );
 }

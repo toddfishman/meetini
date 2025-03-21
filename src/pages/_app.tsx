@@ -1,6 +1,9 @@
 import "@/styles/globals.css";
 import type { AppProps } from "next/app";
 import { SessionProvider } from "next-auth/react";
+import { ThemeProvider } from '@mui/material/styles';
+import CssBaseline from '@mui/material/CssBaseline';
+import theme from '../theme';
 import { ErrorBoundary } from "react-error-boundary";
 
 function ErrorFallback({ error }: { error: Error }) {
@@ -18,7 +21,10 @@ export default function App({ Component, pageProps: { session, ...pageProps } }:
   return (
     <ErrorBoundary FallbackComponent={ErrorFallback}>
       <SessionProvider session={session}>
-        <Component {...pageProps} />
+        <ThemeProvider theme={theme}>
+          <CssBaseline />
+          <Component {...pageProps} />
+        </ThemeProvider>
       </SessionProvider>
     </ErrorBoundary>
   );

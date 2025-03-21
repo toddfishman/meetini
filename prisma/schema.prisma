@@ -32,6 +32,7 @@ model User {
   image             String?
   emailVerified     DateTime?
   meetingPreferences MeetingPreferences?
+  preferences       UserPreferences?
 }
 
 model Invitation {
@@ -107,7 +108,7 @@ model Response {
 }
 
 model Preferences {
-  id            String     @id @default(cuid())
+  id            String   @id @default(cuid())
   invitation    Invitation @relation(fields: [invitationId], references: [id], onDelete: Cascade)
   invitationId  String     @unique
   timePreference String?   // morning, afternoon, evening
@@ -260,4 +261,51 @@ model MeetingPreferences {
   schedulingRules    String  // JSON string
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
-} 
+}
+
+model UserPreferences {
+  id                String    @id @default(cuid())
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId            String    @unique
+
+  // Working Hours & Schedule
+  workingHours      Json      // { start: "HH:mm", end: "HH:mm" }
+  workDays          Int[]     // 0-6 for Sunday-Saturday
+  timezone          String
+  bufferTime        Int       @default(15)  // minutes between meetings
+  maxMeetingsPerDay Int       @default(8)
+  focusTimeBlocks   Json[]    // [{ start: "HH:mm", end: "HH:mm", days: [1,2,3] }]
+  
+  // Location Settings
+  homeLocation      String?   // Address or coordinates
+  officeLocation    String?   // Address or coordinates
+  maxTravelTime     Int       @default(30)  // minutes
+  maxTravelDistance Int       @default(5)   // miles/km
+  preferredTransport String   @default("driving")
+  gpsEnabled        Boolean   @default(false)
+  noGoZones        String[]  // List of areas to avoid
+  
+  // Meeting Preferences
+  defaultDuration   Int       @default(30)  // minutes
+  preferredTimes    Json[]    // [{ type: "1:1", time: "morning" }]
+  virtualMeetingUrl String?   // Default virtual meeting URL
+  defaultMeetingType String   @default("virtual")
+  preferredPlatforms String[] // ["Google Meet", "Zoom", etc.]
+  
+  // Personal Time
+  personalEvents    Json[]    // [{ title: "Gym", start: "HH:mm", end: "HH:mm", days: [1,3,5] }]
+  mealTimes        Json[]    // [{ type: "lunch", start: "HH:mm", end: "HH:mm" }]
+  
+  // Notification Preferences
+  emailNotifications Boolean  @default(true)
+  smsNotifications  Boolean   @default(false)
+  travelAlerts      Boolean   @default(true)
+  weatherAlerts     Boolean   @default(true)
+  
+  // Calendar Settings
+  defaultCalendarId String?
+  calendarVisibility Json     // { "work": true, "personal": false }
+  
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+}
