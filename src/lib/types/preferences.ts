@@ -63,5 +63,41 @@ export enum MeetingType {
   COFFEE = 'coffee',
   LUNCH = 'lunch',
   MEETING = 'meeting',
-  SYNC = 'sync'
+  ONE_ON_ONE = 'one_on_one',
+  TEAM = 'team',
+  INTERVIEW = 'interview'
 }
+
+export const DEFAULT_MEETING_PREFERENCES: { [key in MeetingType]: MeetingTypePreference } = {
+  [MeetingType.COFFEE]: {
+    preferredDuration: 60, // Coffee chats are typically 1 hour
+    preferredBuffer: 30, // Buffer time for travel
+    preferredTimeRanges: [
+      { start: '09:00', end: '11:00' }, // Morning coffee
+      { start: '14:00', end: '16:00' }  // Afternoon coffee
+    ]
+  },
+  [MeetingType.LUNCH]: {
+    preferredDuration: 60,
+    preferredBuffer: 30,
+    preferredTimeRanges: [
+      { start: '12:00', end: '14:00' }
+    ]
+  },
+  [MeetingType.MEETING]: {
+    preferredDuration: 30,
+    preferredBuffer: 15
+  },
+  [MeetingType.ONE_ON_ONE]: {
+    preferredDuration: 30,
+    preferredBuffer: 15
+  },
+  [MeetingType.TEAM]: {
+    preferredDuration: 60,
+    preferredBuffer: 15
+  },
+  [MeetingType.INTERVIEW]: {
+    preferredDuration: 45,
+    preferredBuffer: 15
+  }
+};
