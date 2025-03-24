@@ -1,0 +1,39 @@
+{
+  "name": "meetini-smart-scheduling",
+  "version": "1.0.0",
+  "description": "Smart scheduling system for Meetini",
+  "main": "dist/index.js",
+  "type": "commonjs",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "test": "jest",
+    "start": "ts-node src/scripts/testContactSearch.ts",
+    "lint": "eslint src --ext .ts",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "dev": "ts-node"
+  },
+  "dependencies": {
+    "@googleapis/calendar": "^9.6.0",
+    "@googleapis/gmail": "^9.0.0",
+    "dotenv": "^16.4.5",
+    "google-auth-library": "^9.6.3",
+    "googleapis": "^133.0.0",
+    "openai": "^4.28.4"
+  },
+  "devDependencies": {
+    "@jest/globals": "^29.7.0",
+    "@types/jest": "^29.5.12",
+    "@types/node": "^20.11.24",
+    "@typescript-eslint/eslint-plugin": "^7.1.0",
+    "@typescript-eslint/parser": "^7.1.0",
+    "eslint": "^8.57.0",
+    "jest": "^29.7.0",
+    "prettier": "^3.2.5",
+    "ts-jest": "^29.1.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  },
+  "author": "",
+  "license": "ISC"
+}
