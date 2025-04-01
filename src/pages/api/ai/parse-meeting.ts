@@ -2,6 +2,9 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import OpenAI from 'openai';
 import { searchEmailContacts } from '@/lib/google';
 import { extractNames } from '@/lib/nlp';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '../auth/[...nextauth]';
+import { prisma } from '@/lib/prisma';
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -9,15 +12,18 @@ const openai = new OpenAI({
 
 interface ParsedMeetingRequest {
   title: string;
-  participants: string[];
   preferences: {
-    timePreference?: 'morning' | 'afternoon' | 'evening';
-    durationType?: '30min' | '1hour' | '2hours';
-    locationType?: 'coffee' | 'restaurant' | 'office' | 'virtual';
+    timePreference: 'morning' | 'afternoon' | 'evening';
+    durationType: '30min' | '1hour' | '2hours';
+    locationType: 'coffee' | 'restaurant' | 'bar' | 'office' | 'virtual';
   };
   location?: string;
-  priority?: number;
-  notes?: string;
+  timeConstraints: {
+    startDate: string;  // ISO format
+    endDate: string;    // ISO format
+    specificTime?: string;  // HH:mm format
+  };
+  participants: string[];
 }
 
 function validateEmail(email: string): boolean {
@@ -47,10 +53,6 @@ async function resolveParticipants(req: NextApiRequest, participants: string[]):
     } catch (error) {
       console.error('Error searching contacts:', error);
     }
-    
-    // Fallback: If no email found, construct a Gmail address
-    const gmailAddress = `${participant.trim().toLowerCase().replace(/\s+/g, '')}@gmail.com`;
-    resolvedParticipants.push(gmailAddress);
   }
   
   return resolvedParticipants;
@@ -65,129 +67,101 @@ export default async function handler(
   }
 
   try {
-    const { prompt } = req.body;
-
-    if (!prompt) {
-      return res.status(400).json({ error: 'Prompt is required' });
+    const session = await getServerSession(req, res, authOptions);
+    if (!session?.user?.email) {
+      return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    console.log('Processing prompt:', prompt);
+    const { prompt } = req.body;
+    if (!prompt) {
+      return res.status(400).json({ error: 'Missing prompt' });
+    }
 
-    // First, extract potential names using our NLP utility
-    const extractedNames = extractNames(prompt);
-    console.log('Extracted names:', extractedNames);
-
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4",
-      messages: [
-        {
-          role: "system",
-          content: `You are an AI assistant that helps parse meeting requests into structured data. 
-          Pay special attention to email addresses and names that should be converted to email addresses.
-          If a name is mentioned without an email, assume it's a Gmail address.
-          Extract the following information:
-          - Meeting title (create one if not explicitly stated)
-          - Participants (emails or names - if no domain is specified, assume @gmail.com)
-          - Time preferences (morning/afternoon/evening)
-          - Duration (30min/1hour/2hours)
-          - Location type (coffee/restaurant/office/virtual)
-          - Specific location (if mentioned)
-          - Priority (1-10)
-          - Additional notes/context
-          
-          Names already extracted from the prompt: ${extractedNames.join(', ')}`
-        },
-        {
-          role: "user",
-          content: prompt
-        }
-      ],
-      functions: [
-        {
-          name: "create_meeting_request",
-          description: "Parse the meeting request into structured data",
-          parameters: {
-            type: "object",
-            properties: {
-              title: {
-                type: "string",
-                description: "A clear title for the meeting"
-              },
-              participants: {
-                type: "array",
-                items: { type: "string" },
-                description: "List of participant emails (convert names to email addresses if needed)"
-              },
-              preferences: {
-                type: "object",
-                properties: {
-                  timePreference: {
-                    type: "string",
-                    enum: ["morning", "afternoon", "evening"]
-                  },
-                  durationType: {
-                    type: "string",
-                    enum: ["30min", "1hour", "2hours"]
-                  },
-                  locationType: {
-                    type: "string",
-                    enum: ["coffee", "restaurant", "office", "virtual"]
-                  }
-                }
-              },
-              location: {
-                type: "string",
-                description: "Specific location if mentioned"
-              },
-              priority: {
-                type: "number",
-                minimum: 1,
-                maximum: 10,
-                description: "Meeting priority (1-10)"
-              },
-              notes: {
-                type: "string",
-                description: "Additional context or notes about the meeting"
-              }
-            },
-            required: ["title", "participants", "preferences"]
-          }
-        }
-      ],
-      function_call: { name: "create_meeting_request" }
+    // Get user preferences for context
+    const userPrefs = await prisma.userPreferences.findUnique({
+      where: { userId: session.user.id }
     });
 
-    const functionCall = completion.choices[0].message.function_call;
-    if (!functionCall || !functionCall.arguments) {
-      throw new Error('Failed to parse meeting request - no function call response');
+    // Use OpenAI to parse the meeting request
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4-turbo-preview",
+      messages: [{
+        role: "system",
+        content: `You are a smart meeting assistant. Given a natural language request from a user, your job is to interpret it and return a structured JSON object that captures the user's intent and context.
+
+Return ONLY a JSON object in this exact format:
+{
+  "title": "Short, human-readable meeting title",
+  "preferences": {
+    "timePreference": "morning" | "afternoon" | "evening",
+    "durationType": "30min" | "1hour" | "2hours",
+    "locationType": "coffee" | "restaurant" | "bar" | "office" | "virtual"
+  },
+  "location": "Optional location name or address if specified",
+  "timeConstraints": {
+    "startDate": "Earliest possible date (ISO format)",
+    "endDate": "Latest acceptable date (ISO format)",
+    "specificTime": "Optional 24-hour time (HH:mm) if explicitly mentioned"
+  },
+  "participants": ["List of emails or names if present in the prompt"]
+}
+
+Interpret timing, tone, and meaning like a human would:
+- "Next week" means Monday–Friday of the following calendar week
+- "Coffee" implies morning; "happy hour" implies late afternoon or early evening
+- Avoid suggesting times too soon unless clearly stated (e.g. not 10 minutes from now)
+- Always generate a future time window based on the user's intent
+- Respect context even if it's subtle
+
+User's working hours: ${userPrefs?.workingHours?.start || '09:00'} - ${userPrefs?.workingHours?.end || '17:00'}
+User's preferred meeting duration: ${userPrefs?.defaultDuration || 30} minutes
+User's timezone: ${userPrefs?.timezone || 'America/Los_Angeles'}
+
+If time is vague (e.g. "soon" or "sometime this month"), make a reasonable guess and return a time window.
+
+DO NOT include explanations or extra text — only return the final JSON result.`
+      }, {
+        role: "user",
+        content: prompt
+      }],
+      temperature: 0.1,
+      response_format: { type: "json_object" }
+    });
+
+    const aiResponse = completion.choices[0]?.message?.content;
+    if (!aiResponse) {
+      throw new Error('No response from OpenAI');
     }
 
-    console.log('OpenAI response:', functionCall.arguments);
-
-    const parsedArgs = JSON.parse(functionCall.arguments) as ParsedMeetingRequest;
+    const parsed = JSON.parse(aiResponse);
     
-    // Resolve participants using Gmail history
-    parsedArgs.participants = await resolveParticipants(req, parsedArgs.participants);
-
-    // Ensure we have required fields
-    if (!parsedArgs.title || !parsedArgs.participants || !parsedArgs.preferences) {
-      console.error('Missing required fields:', parsedArgs);
-      throw new Error('Missing required fields in parsed request');
+    // Validate the response has all required fields
+    if (!parsed.title || !parsed.preferences || !parsed.timeConstraints) {
+      throw new Error('Invalid response format from OpenAI');
     }
 
-    // Set default values if needed
-    if (!parsedArgs.preferences.timePreference) parsedArgs.preferences.timePreference = 'morning';
-    if (!parsedArgs.preferences.durationType) parsedArgs.preferences.durationType = '1hour';
-    if (!parsedArgs.preferences.locationType) parsedArgs.preferences.locationType = 'virtual';
+    // Extract and resolve participant emails
+    const extractedNames = extractNames(prompt);
+    const participants = await resolveParticipants(req, [
+      ...extractedNames,
+      ...(parsed.participants || [])
+    ]);
 
-    console.log('Final parsed request:', parsedArgs);
-    return res.status(200).json(parsedArgs);
+    // Add the current user as a participant if not already included
+    if (!participants.includes(session.user.email)) {
+      participants.unshift(session.user.email);
+    }
+
+    const response: ParsedMeetingRequest = {
+      ...parsed,
+      participants
+    };
+
+    res.status(200).json(response);
   } catch (error) {
-    console.error('Parsing Error:', error);
-    return res.status(500).json({ 
-      error: 'Failed to parse meeting request',
-      details: error instanceof Error ? error.message : 'Unknown error',
-      timestamp: new Date().toISOString()
+    console.error('Error in parse-meeting:', error);
+    res.status(500).json({ 
+      error: error instanceof Error ? error.message : 'Failed to parse meeting request' 
     });
   }
 }

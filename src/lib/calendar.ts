@@ -1,12 +1,15 @@
 import { google } from 'googleapis';
 import { getToken } from 'next-auth/jwt';
 import type { NextApiRequest } from 'next';
+import { prisma } from './prisma';
+import { ParsedMeetingRequest } from './openai';
 
 const calendar = google.calendar('v3');
 
 interface TimeSlot {
   start: Date;
   end: Date;
+  score: number;  // Higher score means better slot
 }
 
 interface CalendarCredentials {
@@ -17,13 +20,19 @@ interface CalendarCredentials {
   expiry_date: number;
 }
 
+interface UserPreference {
+  workingHours: {
+    start: string;
+    end: string;
+  };
+  timezone: string;
+  defaultDuration: number;
+}
+
 export async function findOptimalTimes(
   req: NextApiRequest,
   participants: string[],
-  preferences: {
-    timePreference?: 'morning' | 'afternoon' | 'evening';
-    durationType?: '30min' | '1hour' | '2hours';
-  }
+  parsedRequest: ParsedMeetingRequest
 ): Promise<TimeSlot[]> {
   try {
     const token = await getToken({ req });
@@ -37,11 +46,68 @@ export async function findOptimalTimes(
     const credentials = token.credentials as CalendarCredentials;
     auth.setCredentials(credentials);
 
-    // Calculate time range based on preferences
+    // Get user preferences for all Meetini users
+    const userPreferences = new Map<string, UserPreference>();
+    const meetiniUsers = await prisma.user.findMany({
+      where: {
+        email: {
+          in: participants
+        }
+      },
+      include: {
+        preferences: true
+      }
+    });
+
+    meetiniUsers.forEach(user => {
+      if (user.preferences) {
+        userPreferences.set(user.email, {
+          workingHours: user.preferences.workingHours || { start: '09:00', end: '17:00' },
+          timezone: user.preferences.timezone || 'America/Los_Angeles',
+          defaultDuration: user.preferences.defaultDuration || 30
+        });
+      }
+    });
+
+    // Use timeConstraints from the parsed request
+    const timeMin = new Date(parsedRequest.timeConstraints.startDate);
+    const timeMax = new Date(parsedRequest.timeConstraints.endDate);
+    
+    // Only adjust times if they're in the past
     const now = new Date();
-    const timeMin = new Date(now);
-    const timeMax = new Date(now);
-    timeMax.setDate(timeMax.getDate() + 14); // Look 2 weeks ahead
+    if (timeMin < now) {
+      // If the requested time is today, use 15 mins from now
+      if (timeMin.toDateString() === now.toDateString()) {
+        timeMin.setTime(now.getTime() + 15 * 60000);
+      } else {
+        // If it's a past date, use 9am tomorrow
+        timeMin.setDate(now.getDate() + 1);
+        timeMin.setHours(9, 0, 0, 0);
+      }
+    }
+
+    // If a specific time is requested and it's at least 15 mins in the future
+    if (parsedRequest.timeConstraints.specificTime) {
+      const [hours, minutes] = parsedRequest.timeConstraints.specificTime.split(':').map(Number);
+      const specificTime = new Date(timeMin);
+      specificTime.setHours(hours, minutes, 0, 0);
+      
+      if (specificTime > now) {
+        const isAvailable = await checkAvailability(
+          specificTime,
+          getDurationInMinutes(parsedRequest.preferences.durationType, parsedRequest),
+          participants,
+          auth,
+          userPreferences
+        );
+
+        if (isAvailable) {
+          const end = new Date(specificTime);
+          end.setMinutes(end.getMinutes() + getDurationInMinutes(parsedRequest.preferences.durationType, parsedRequest));
+          return [{ start: specificTime, end, score: 100 }];
+        }
+      }
+    }
 
     // Get free/busy information for all participants
     const freeBusyResponse = await calendar.freebusy.query({
@@ -49,75 +115,195 @@ export async function findOptimalTimes(
       requestBody: {
         timeMin: timeMin.toISOString(),
         timeMax: timeMax.toISOString(),
-        items: participants.map(email => ({ id: email })),
-      },
+        items: participants.map(email => ({ id: email }))
+      }
     });
 
     const busySlots = freeBusyResponse.data.calendars || {};
-    
-    // Find available slots that work for everyone
+
+    // Find available slots considering everyone's preferences and availability
     const availableSlots = findAvailableSlots(
       timeMin,
       timeMax,
       busySlots,
-      preferences
+      parsedRequest,
+      userPreferences
     );
 
-    return availableSlots;
+    if (availableSlots.length === 0) {
+      throw new Error('No available time slots found that work for all participants');
+    }
+
+    // Sort by score (best slots first) and return top 5
+    return availableSlots
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5);
+
   } catch (error) {
-    console.error('Calendar API Error:', error);
-    throw new Error('Failed to find optimal meeting times');
+    console.error('Error finding optimal times:', error);
+    throw error;
   }
+}
+
+async function checkAvailability(
+  startTime: Date,
+  duration: number,
+  participants: string[],
+  auth: any,
+  userPreferences: Map<string, UserPreference>
+): Promise<boolean> {
+  const endTime = new Date(startTime);
+  endTime.setMinutes(endTime.getMinutes() + duration);
+
+  // Check calendar availability
+  const freeBusyResponse = await calendar.freebusy.query({
+    auth,
+    requestBody: {
+      timeMin: startTime.toISOString(),
+      timeMax: endTime.toISOString(),
+      items: participants.map(email => ({ id: email }))
+    }
+  });
+
+  const busySlots = freeBusyResponse.data.calendars || {};
+
+  // Check if anyone is busy
+  for (const email of participants) {
+    const calendar = busySlots[email];
+    if (calendar?.busy && calendar.busy.length > 0) {
+      return false;
+    }
+
+    // Check against user preferences if they're a Meetini user
+    const prefs = userPreferences.get(email);
+    if (prefs) {
+      const localTime = new Date(startTime.toLocaleString('en-US', { timeZone: prefs.timezone }));
+      const [startHour, startMinute] = prefs.workingHours.start.split(':').map(Number);
+      const [endHour, endMinute] = prefs.workingHours.end.split(':').map(Number);
+
+      if (
+        localTime.getHours() < startHour ||
+        (localTime.getHours() === startHour && localTime.getMinutes() < startMinute) ||
+        localTime.getHours() > endHour ||
+        (localTime.getHours() === endHour && localTime.getMinutes() > endMinute)
+      ) {
+        return false;
+      }
+    }
+  }
+
+  return true;
 }
 
 function findAvailableSlots(
   start: Date,
   end: Date,
   busySlots: any,
-  preferences: {
-    timePreference?: 'morning' | 'afternoon' | 'evening';
-    durationType?: '30min' | '1hour' | '2hours';
-  }
+  parsedRequest: ParsedMeetingRequest,
+  userPreferences: Map<string, UserPreference>
 ): TimeSlot[] {
-  const availableSlots: TimeSlot[] = [];
-  const durationInMinutes = getDurationInMinutes(preferences.durationType);
-  const workingHours = getWorkingHours(preferences.timePreference);
+  const slots: TimeSlot[] = [];
+  const duration = getDurationInMinutes(parsedRequest.preferences.durationType, parsedRequest);
+  const workingHours = getWorkingHours(parsedRequest.preferences.timePreference, parsedRequest.preferences.locationType);
+  const slotInterval = 30; // minutes
 
-  let current = new Date(start);
-  while (current < end) {
-    // Only check during working hours
-    if (isWithinWorkingHours(current, workingHours)) {
-      const slotEnd = new Date(current.getTime() + durationInMinutes * 60000);
+  let currentSlot = new Date(start);
+  while (currentSlot < end) {
+    // Check if this slot works for everyone
+    const endTime = new Date(currentSlot);
+    endTime.setMinutes(endTime.getMinutes() + duration);
+
+    if (
+      isWithinWorkingHours(currentSlot, workingHours) &&
+      isSlotAvailable(currentSlot, endTime, busySlots) &&
+      isWithinUserPreferences(currentSlot, endTime, userPreferences)
+    ) {
+      // Calculate a score for this slot based on how ideal it is
+      const score = calculateSlotScore(
+        currentSlot,
+        parsedRequest.preferences.timePreference,
+        parsedRequest.preferences.locationType
+      );
       
-      // Check if this slot works for all participants
-      if (isSlotAvailable(current, slotEnd, busySlots)) {
-        availableSlots.push({
-          start: new Date(current),
-          end: slotEnd,
-        });
-      }
+      slots.push({
+        start: new Date(currentSlot),
+        end: new Date(endTime),
+        score
+      });
     }
-    
-    // Move to next 30-minute slot
-    current.setMinutes(current.getMinutes() + 30);
+
+    // Move to next slot
+    currentSlot.setMinutes(currentSlot.getMinutes() + slotInterval);
   }
 
-  return availableSlots.slice(0, 5); // Return top 5 slots
+  return slots;
 }
 
-function getDurationInMinutes(durationType?: string): number {
-  switch (durationType) {
-    case '30min':
-      return 30;
-    case '2hours':
-      return 120;
-    case '1hour':
-    default:
-      return 60;
+function calculateSlotScore(
+  time: Date,
+  timePreference: string,
+  locationType: string
+): number {
+  let score = 50; // Base score
+  const hour = time.getHours();
+  const dayOfWeek = time.getDay();
+
+  // Adjust score based on time of day preference
+  switch (timePreference) {
+    case 'morning':
+      score += hour >= 9 && hour <= 11 ? 30 : 0;
+      break;
+    case 'afternoon':
+      score += hour >= 13 && hour <= 15 ? 30 : 0;
+      break;
+    case 'evening':
+      score += hour >= 17 && hour <= 19 ? 30 : 0;
+      break;
   }
+
+  // Adjust score based on location type
+  switch (locationType) {
+    case 'coffee':
+      score += hour >= 9 && hour <= 11 ? 20 : -10;
+      break;
+    case 'restaurant':
+      score += (hour >= 12 && hour <= 14) || (hour >= 18 && hour <= 20) ? 20 : -10;
+      break;
+    case 'bar':
+      score += hour >= 16 && hour <= 19 ? 20 : -10;
+      break;
+    case 'office':
+      score += hour >= 10 && hour <= 16 ? 20 : -10;
+      break;
+  }
+
+  // Prefer weekdays for business meetings
+  if (locationType === 'office' || locationType === 'virtual') {
+    score += (dayOfWeek >= 1 && dayOfWeek <= 5) ? 10 : -10;
+  }
+
+  // Prefer weekends for social meetings
+  if (locationType === 'bar' || locationType === 'restaurant') {
+    score += (dayOfWeek === 0 || dayOfWeek === 6) ? 10 : 0;
+  }
+
+  return Math.max(0, Math.min(100, score)); // Keep score between 0 and 100
 }
 
-function getWorkingHours(timePreference?: string): { start: number; end: number } {
+function getWorkingHours(timePreference?: string, locationType?: string): { start: number; end: number } {
+  // First check location type for specific constraints
+  switch (locationType) {
+    case 'coffee':
+      return { start: 8, end: 11 };
+    case 'restaurant':
+      return { start: 11, end: 21 };
+    case 'bar':
+      return { start: 16, end: 23 };
+    case 'office':
+      return { start: 9, end: 17 };
+  }
+
+  // If no location type or it's virtual, use time preference
   switch (timePreference) {
     case 'morning':
       return { start: 9, end: 12 };
@@ -126,7 +312,7 @@ function getWorkingHours(timePreference?: string): { start: number; end: number 
     case 'evening':
       return { start: 17, end: 20 };
     default:
-      return { start: 9, end: 20 };
+      return { start: 9, end: 17 };
   }
 }
 
@@ -144,20 +330,40 @@ function isSlotAvailable(
   busySlots: any
 ): boolean {
   // Check each participant's calendar
-  for (const calendar of Object.values(busySlots)) {
-    const busy = (calendar as any).busy || [];
-    for (const slot of busy) {
-      const busyStart = new Date(slot.start);
-      const busyEnd = new Date(slot.end);
-      
-      // Check for overlap
-      if (start < busyEnd && end > busyStart) {
+  for (const email in busySlots) {
+    const calendar = busySlots[email];
+    if (!calendar) continue;
+
+    // Check if the proposed time overlaps with any busy slots
+    for (const busy of calendar.busy || []) {
+      const busyStart = new Date(busy.start);
+      const busyEnd = new Date(busy.end);
+
+      if (
+        (start >= busyStart && start < busyEnd) ||
+        (end > busyStart && end <= busyEnd) ||
+        (start <= busyStart && end >= busyEnd)
+      ) {
         return false;
       }
     }
   }
-  
+
   return true;
+}
+
+function getDurationInMinutes(durationType?: string, parsedRequest?: ParsedMeetingRequest): number {
+  switch (durationType) {
+    case '30min':
+      return 30;
+    case '1hour':
+      return 60;
+    case '2hours':
+      return 120;
+    default:
+      // If no duration specified, check if it's a coffee meeting (default 30) or regular meeting (default 60)
+      return parsedRequest?.preferences?.locationType === 'coffee' ? 30 : 60;
+  }
 }
 
 export async function createCalendarEvent(
@@ -169,55 +375,55 @@ export async function createCalendarEvent(
     start: Date;
     end: Date;
     attendees: Array<{ email: string; name?: string }>;
+    virtual?: boolean;
   }
 ): Promise<string> {
-  try {
-    const token = await getToken({ req });
-    if (!token?.accessToken) throw new Error('No access token found');
-
-    const auth = new google.auth.OAuth2(
-      process.env.GOOGLE_CLIENT_ID,
-      process.env.GOOGLE_CLIENT_SECRET
-    );
-
-    auth.setCredentials({
-      access_token: token.accessToken as string,
-      refresh_token: token.refreshToken as string
-    });
-
-    const event = {
-      summary: eventDetails.summary,
-      description: eventDetails.description,
-      location: eventDetails.location,
-      start: {
-        dateTime: eventDetails.start.toISOString(),
-        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
-      },
-      end: {
-        dateTime: eventDetails.end.toISOString(),
-        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
-      },
-      attendees: eventDetails.attendees.map(({ email, name }) => ({
-        email,
-        displayName: name
-      })),
-      guestsCanModify: true,
-      guestsCanSeeOtherGuests: true,
-      reminders: {
-        useDefault: true
-      }
-    };
-
-    const response = await calendar.events.insert({
-      auth,
-      calendarId: 'primary',
-      requestBody: event,
-      sendUpdates: 'all'
-    });
-
-    return response.data.id || '';
-  } catch (error) {
-    console.error('Failed to create calendar event:', error);
-    throw new Error('Failed to create calendar event');
+  const token = await getToken({ req });
+  if (!token?.credentials) {
+    throw new Error('No calendar access');
   }
+
+  const auth = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET
+  );
+
+  auth.setCredentials(token.credentials as CalendarCredentials);
+
+  const event = {
+    summary: eventDetails.summary,
+    description: eventDetails.description,
+    start: {
+      dateTime: eventDetails.start.toISOString(),
+      timeZone: 'America/Los_Angeles',
+    },
+    end: {
+      dateTime: eventDetails.end.toISOString(),
+      timeZone: 'America/Los_Angeles',
+    },
+    attendees: eventDetails.attendees,
+    location: eventDetails.location,
+    conferenceData: eventDetails.virtual ? {
+      createRequest: {
+        requestId: `meetini-${Date.now()}`,
+        conferenceSolutionKey: { type: 'hangoutsMeet' },
+      },
+    } : undefined,
+    guestsCanModify: true,
+    guestsCanInviteOthers: false,
+    guestsCanSeeOtherGuests: true,
+    reminders: {
+      useDefault: true
+    }
+  };
+
+  const calendarEvent = await calendar.events.insert({
+    auth,
+    calendarId: 'primary',
+    requestBody: event,
+    conferenceDataVersion: eventDetails.virtual ? 1 : 0,
+    sendUpdates: 'all'
+  });
+
+  return calendarEvent.data.htmlLink || '';
 }

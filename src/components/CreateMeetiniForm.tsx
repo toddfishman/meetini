@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { isContactPickerSupported, selectContacts } from '@/lib/contacts';
+import { CircularProgress, Alert } from '@mui/material';
 
 declare global {
   interface Window {
@@ -51,6 +52,11 @@ interface ContactSearchResult {
   matchedName: string;
 }
 
+interface AssistantMessage {
+  role: 'user' | 'assistant';
+  content: string[];
+}
+
 export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialPrompt }: CreateMeetiniFormProps) {
   const [searchResults, setSearchResults] = useState<{ [key: string]: ContactSearchResult[] }>({});
   const [selectedContacts, setSelectedContacts] = useState<ContactSearchResult[]>([]);
@@ -58,6 +64,8 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [processingStatus, setProcessingStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [threadId, setThreadId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<AssistantMessage[]>([]);
 
   // Handle contact search when prompt changes
   useEffect(() => {
@@ -93,170 +101,155 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
     if (!aiPrompt.trim() || selectedContacts.length === 0) return;
 
     setIsSubmitting(true);
-    setProcessingStatus('🤖 Creating your Meetini...');
+    setProcessingStatus('🤖 Starting conversation with AI...');
     setError(null);
 
     try {
-      const response = await fetch('/api/meetini/ai-create', {
+      console.log('=== FRONTEND REQUEST ===');
+      console.log('Sending to Assistant API:', {
+        prompt: aiPrompt,
+        participants: selectedContacts.map(c => c.email)
+      });
+
+      // First, create a new thread and send the initial message
+      const response = await fetch('/api/assistant/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          prompt: aiPrompt,
-          participants: selectedContacts.map(c => c.email)
+          message: `Please help me schedule: ${aiPrompt}. The participants are: ${selectedContacts.map(c => c.email).join(', ')}`,
+          threadId: null // Start a new thread
         }),
       });
 
-      const data = await response.json();
-
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to create Meetini');
+        const error = await response.json();
+        console.error('Assistant API error:', error);
+        throw new Error(error.error || 'Failed to start scheduling conversation');
       }
 
-      setProcessingStatus('✨ Success! Sending invitations...');
-      setTimeout(() => {
-        onSuccess();
-        onClose();
-      }, 1500);
+      const data = await response.json();
+      console.log('=== FRONTEND RESPONSE ===');
+      console.log('Assistant API response:', data);
+
+      setThreadId(data.threadId);
+      setMessages(data.messages);
+      
+      // Keep the form open and show the conversation
+      setProcessingStatus(null);
+
+      // Only show success and close if we have confirmation
+      if (data.messages.some(msg => 
+        msg.role === 'assistant' && 
+        msg.content.some((c: any) => c.text?.value?.includes('calendar event has been created'))
+      )) {
+        setProcessingStatus('✨ Success! Sending invitations...');
+        setTimeout(() => {
+          onSuccess();
+          onClose();
+        }, 1500);
+      }
     } catch (err) {
       console.error('Failed to create Meetini:', err);
       setError(err instanceof Error ? err.message : 'An error occurred');
+      setProcessingStatus(null);
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const renderContactResult = (contact: ContactSearchResult) => {
-    const isSelected = selectedContacts.some(c => c.email === contact.email);
-    const lastContactDate = new Date(contact.lastContact).toLocaleDateString();
-    
-    return (
-      <div 
-        key={contact.email}
-        className={`flex items-center p-3 rounded-lg cursor-pointer transition-all ${
-          isSelected ? 'bg-[#22c55e]/50 dark:bg-[#22c55e]/50' : 'hover:bg-gray-100 dark:hover:bg-gray-800'
-        }`}
-        onClick={() => handleContactToggle(contact)}
-      >
-        <div className="flex items-center justify-center w-6 h-6 mr-3">
-          {isSelected ? (
-            <svg className="w-5 h-5 text-[#22c55e]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-            </svg>
-          ) : (
-            <svg className="w-5 h-5 text-gray-400 hover:text-[#22c55e]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-            </svg>
-          )}
+  return (
+    <div className="space-y-4">
+      <form onSubmit={handleCreateMeetini} className="space-y-4">
+        <div>
+          <textarea
+            value={aiPrompt}
+            onChange={(e) => setAiPrompt(e.target.value)}
+            placeholder="What kind of meeting would you like to schedule?"
+            className="w-full p-3 border rounded-lg dark:bg-gray-800"
+            rows={3}
+            disabled={isSubmitting}
+          />
         </div>
-        
-        <div className="flex-1">
-          <div className="flex items-center justify-between">
-            <div>
-              <h4 className="font-medium">{contact.name}</h4>
-              <p className="text-sm text-gray-500">{contact.email}</p>
-            </div>
-            <div className="text-right text-sm text-gray-500">
-              <div>{contact.frequency} interactions</div>
-              <div>Last: {lastContactDate}</div>
-            </div>
+
+        <div className="space-y-2">
+          <h3 className="font-medium">Selected Participants:</h3>
+          <div className="flex flex-wrap gap-2">
+            {selectedContacts.map((contact) => (
+              <div
+                key={contact.email}
+                className="flex items-center gap-2 px-3 py-1 bg-green-100 dark:bg-green-900 rounded-full"
+                onClick={() => handleContactToggle(contact)}
+              >
+                <span>{contact.name || contact.email}</span>
+                <button type="button" className="text-sm">&times;</button>
+              </div>
+            ))}
           </div>
         </div>
-      </div>
-    );
-  };
 
-  if (!isOpen) return null;
-
-  return (
-    <div className="fixed inset-0 z-50 overflow-y-auto">
-      <div className="flex min-h-screen items-center justify-center p-4">
-        <div className="fixed inset-0 bg-black/50 transition-opacity" onClick={onClose} />
-        
-        <div className="relative bg-white dark:bg-gray-900 rounded-lg p-6 max-w-2xl w-full">
-          <h2 className="text-xl font-semibold mb-6 text-gray-900 dark:text-white">Schedule a Meeting</h2>
-          
-          <div className="space-y-6">
-            <div>
-              <textarea
-                value={aiPrompt}
-                onChange={(e) => setAiPrompt(e.target.value)}
-                placeholder="Tell me what kind of meeting you want to schedule..."
-                className="w-full p-3 rounded-lg border bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-                rows={3}
-              />
-            </div>
-
-            {Object.entries(searchResults).length > 0 && (
-              <div className="space-y-4">
-                <h3 className="text-lg font-medium text-gray-900 dark:text-white">Suggested Contacts</h3>
-                {Object.entries(searchResults).map(([name, contacts]) => (
-                  <div key={name} className="space-y-2">
-                    {contacts.map(contact => renderContactResult(contact))}
+        <div className="space-y-2">
+          <h3 className="font-medium">Suggested Participants:</h3>
+          <div className="space-y-2">
+            {Object.entries(searchResults).map(([query, results]) => (
+              <div key={query}>
+                {results.map(contact => (
+                  <div key={contact.email} onClick={() => handleContactToggle(contact)}
+                       className={`p-2 rounded cursor-pointer ${
+                         selectedContacts.some(c => c.email === contact.email)
+                           ? 'bg-green-100 dark:bg-green-900'
+                           : 'hover:bg-gray-100 dark:hover:bg-gray-800'
+                       }`}>
+                    {contact.name} ({contact.email})
                   </div>
                 ))}
               </div>
-            )}
-
-            {selectedContacts.length > 0 && (
-              <div className="mt-4">
-                <h3 className="text-lg font-medium mb-2 text-gray-900 dark:text-white">Selected Contacts</h3>
-                <div className="space-y-2">
-                  {selectedContacts.map(contact => (
-                    <div key={contact.email} 
-                      className="flex items-center justify-between bg-[#22c55e]/50 dark:bg-[#22c55e]/50 p-3 rounded-lg"
-                    >
-                      <div>
-                        <div className="font-medium text-gray-900 dark:text-white">{contact.name}</div>
-                        <div className="text-sm text-gray-500">{contact.email}</div>
-                      </div>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleContactToggle(contact);
-                        }}
-                        className="p-1 hover:text-red-500 transition-colors"
-                      >
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                        </svg>
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div className="flex justify-end space-x-3">
-              <button
-                onClick={onClose}
-                className="px-4 py-2 text-gray-600 hover:text-gray-800"
-                disabled={isSubmitting}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleCreateMeetini}
-                disabled={isSubmitting || !aiPrompt.trim() || selectedContacts.length === 0}
-                className="px-4 py-2 bg-[#22c55e] text-white rounded-lg hover:bg-[#22c55e]/80 disabled:opacity-50"
-              >
-                {isSubmitting ? 'Creating...' : 'Create Meetini'}
-              </button>
-            </div>
-
-            {error && (
-              <div className="text-red-500 text-sm mt-2">
-                {error}
-              </div>
-            )}
-
-            {processingStatus && (
-              <div className="text-[#22c55e] text-sm mt-2">
-                {processingStatus}
-              </div>
-            )}
+            ))}
           </div>
         </div>
-      </div>
+
+        {error && (
+          <Alert severity="error" className="mt-4">
+            {error}
+          </Alert>
+        )}
+
+        <div className="flex justify-end gap-4">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2 text-gray-600 dark:text-gray-300"
+            disabled={isSubmitting}
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            className="px-4 py-2 bg-green-500 text-white rounded-lg disabled:opacity-50"
+            disabled={isSubmitting || !aiPrompt.trim() || selectedContacts.length === 0}
+          >
+            {isSubmitting ? (
+              <div className="flex items-center gap-2">
+                <CircularProgress size={20} color="inherit" />
+                <span>{processingStatus}</span>
+              </div>
+            ) : (
+              'Create Meetini'
+            )}
+          </button>
+        </div>
+      </form>
+
+      {messages.length > 0 && (
+        <div className="mt-4 p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
+          {messages.map((msg, i) => (
+            <div key={i} className={`mb-2 ${msg.role === 'assistant' ? 'text-blue-600' : ''}`}>
+              {msg.content.map((c, j) => (
+                <p key={j}>{c}</p>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

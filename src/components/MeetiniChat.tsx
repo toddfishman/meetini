@@ -61,12 +61,13 @@ export default function MeetiniChat({ isOpen, onClose, onSuccess, initialPrompt 
 
     setIsProcessing(true);
     try {
-      const response = await fetch('/api/meetini/ai-create', {
+      const userMessage = messages.filter(m => m.type === 'user').map(m => m.content).join(' ');
+      const response = await fetch('/api/assistant/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          prompt: messages.filter(m => m.type === 'user').map(m => m.content).join(' '),
-          participants: selectedContacts.map(c => c.email)
+          message: userMessage,
+          threadId: null // Start a new thread
         }),
       });
 
