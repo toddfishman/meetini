@@ -19,6 +19,15 @@ export default function AssistantChat({ onConfirmMeeting }: AssistantChatProps) 
   const [threadId, setThreadId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // Show initial message
+  useEffect(() => {
+    setMessages([{
+      role: 'assistant',
+      content: ['Hi! I can help you schedule a meeting. Just tell me who you want to meet with and any other details you\'d like to include.'],
+      id: 'initial'
+    }]);
+  }, []);
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
@@ -32,10 +41,21 @@ export default function AssistantChat({ onConfirmMeeting }: AssistantChatProps) 
     if (!input.trim() || isLoading) return;
 
     const userMessage = input.trim();
+    
+    // Add user message immediately
+    setMessages(prev => [...prev, {
+      role: 'user',
+      content: [userMessage],
+      id: Date.now().toString()
+    }]);
+    
     setInput('');
     setIsLoading(true);
 
     try {
+      console.log('Sending message:', userMessage);
+      console.log('Thread ID:', threadId);
+      
       const response = await fetch('/api/assistant/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -50,6 +70,8 @@ export default function AssistantChat({ onConfirmMeeting }: AssistantChatProps) 
       }
 
       const data = await response.json();
+      console.log('Assistant response:', data);
+      
       setThreadId(data.threadId);
 
       // Convert OpenAI messages to our format
@@ -63,7 +85,11 @@ export default function AssistantChat({ onConfirmMeeting }: AssistantChatProps) 
 
     } catch (error) {
       console.error('Failed to process message:', error);
-      // Optionally show error to user
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: ['Sorry, I encountered an error. Please try again.'],
+        id: 'error-' + Date.now()
+      }]);
     } finally {
       setIsLoading(false);
     }

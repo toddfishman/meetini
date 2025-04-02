@@ -107,51 +107,71 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
     try {
       console.log('=== FRONTEND REQUEST ===');
       console.log('Sending to Assistant API:', {
-        prompt: aiPrompt,
+        message: aiPrompt,
         participants: selectedContacts.map(c => c.email)
       });
 
-      // First, create a new thread and send the initial message
-      const response = await fetch('/api/assistant/chat', {
+      // Send to the AI-create endpoint
+      const response = await fetch('/api/meetini/ai-create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          message: `Please help me schedule: ${aiPrompt}. The participants are: ${selectedContacts.map(c => c.email).join(', ')}`,
-          threadId: null // Start a new thread
+          message: aiPrompt,
+          participants: selectedContacts.map(c => c.email)
         }),
       });
 
       if (!response.ok) {
-        const error = await response.json();
-        console.error('Assistant API error:', error);
-        throw new Error(error.error || 'Failed to start scheduling conversation');
+        throw new Error('Failed to create Meetini');
       }
 
       const data = await response.json();
-      console.log('=== FRONTEND RESPONSE ===');
-      console.log('Assistant API response:', data);
-
-      setThreadId(data.threadId);
-      setMessages(data.messages);
-      
-      // Keep the form open and show the conversation
-      setProcessingStatus(null);
-
-      // Only show success and close if we have confirmation
-      if (data.messages.some(msg => 
-        msg.role === 'assistant' && 
-        msg.content.some((c: any) => c.text?.value?.includes('calendar event has been created'))
-      )) {
-        setProcessingStatus('✨ Success! Sending invitations...');
-        setTimeout(() => {
-          onSuccess();
-          onClose();
-        }, 1500);
+      if (data.error) {
+        throw new Error(data.error);
       }
-    } catch (err) {
-      console.error('Failed to create Meetini:', err);
-      setError(err instanceof Error ? err.message : 'An error occurred');
-      setProcessingStatus(null);
+
+      // Convert OpenAI messages to our format
+      if (data.messages?.length > 0) {
+        const messages = data.messages.map((msg: any) => ({
+          role: msg.role,
+          content: msg.content.map((c: any) => c.text.value)
+        }));
+        setMessages(messages.reverse()); // OpenAI returns newest first
+      }
+
+      // Use the suggested times from the Assistant
+      if (!data.suggestedTimes?.length) {
+        throw new Error('No suggested times available. Please try again.');
+      }
+
+      // Create the calendar event with the suggested time
+      const createResponse = await fetch('/api/meetini/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          invite: {
+            type: aiPrompt,
+            participants: selectedContacts.map(c => ({ email: c.email })),
+            suggestedTimes: data.suggestedTimes,
+            createdBy: session?.user?.email
+          }
+        })
+      });
+
+      if (!createResponse.ok) {
+        const error = await createResponse.json();
+        throw new Error(error.error || 'Failed to create calendar event');
+      }
+
+      setProcessingStatus('✨ Success! Calendar invites sent.');
+      setTimeout(() => {
+        onSuccess();
+        onClose();
+      }, 2000);
+
+    } catch (error) {
+      console.error('Failed to create Meetini:', error);
+      setError(error instanceof Error ? error.message : 'An unknown error occurred');
     } finally {
       setIsSubmitting(false);
     }

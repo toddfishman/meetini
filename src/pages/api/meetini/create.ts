@@ -85,11 +85,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     
     const eventTitle = `${meetingType} with ${participantNames}`;
     
-    // Default to 30 minutes from now if no time specified
-    const defaultStartTime = new Date();
-    defaultStartTime.setMinutes(defaultStartTime.getMinutes() + 30);
-    const startTime = invite.suggestedTimes?.[0] || defaultStartTime.toISOString();
-    
+    // REQUIRE suggested times from the Assistant
+    if (!invite.suggestedTimes?.length) {
+      return res.status(400).json({ 
+        error: 'No suggested times provided. Please use the AI Assistant to find optimal meeting times.'
+      });
+    }
+
     // Create calendar event with Meet link for virtual meetings
     let event;
     try {
@@ -97,7 +99,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         summary: eventTitle,
         description: invite.description || `Scheduled via Meetini\n\nOriginal prompt: ${invite.type}`,
         attendees: invite.participants.map((p: MeetiniParticipant) => ({ email: p.email })),
-        startTime,
+        startTime: invite.suggestedTimes[0],
         duration: 30,
         virtual: true
       });

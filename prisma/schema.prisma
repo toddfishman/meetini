@@ -187,9 +187,8 @@ model CalendarAccount {
   userId        String
   user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   provider      String   // 'google', 'outlook', 'apple'
-  accountId     String   // External account identifier
-  accessToken   String
-  refreshToken  String?
+  accessToken   String   @db.Text
+  refreshToken  String?  @db.Text
   expiresAt     DateTime?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt

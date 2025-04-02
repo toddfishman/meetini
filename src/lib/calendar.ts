@@ -44,7 +44,12 @@ export async function findOptimalTimes(
     );
 
     const credentials = token.credentials as CalendarCredentials;
-    auth.setCredentials(credentials);
+    auth.setCredentials({
+      access_token: token.access_token,
+      refresh_token: token.refresh_token,
+      token_type: 'Bearer',
+      expiry_date: token.accessTokenExpires
+    });
 
     // Get user preferences for all Meetini users
     const userPreferences = new Map<string, UserPreference>();
@@ -379,8 +384,8 @@ export async function createCalendarEvent(
   }
 ): Promise<string> {
   const token = await getToken({ req });
-  if (!token?.credentials) {
-    throw new Error('No calendar access');
+  if (!token?.access_token) {
+    throw new Error('No calendar access token');
   }
 
   const auth = new google.auth.OAuth2(
@@ -388,7 +393,12 @@ export async function createCalendarEvent(
     process.env.GOOGLE_CLIENT_SECRET
   );
 
-  auth.setCredentials(token.credentials as CalendarCredentials);
+  auth.setCredentials({
+    access_token: token.access_token,
+    refresh_token: token.refresh_token,
+    token_type: 'Bearer',
+    expiry_date: token.accessTokenExpires
+  });
 
   const event = {
     summary: eventDetails.summary,

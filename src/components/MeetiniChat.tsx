@@ -12,10 +12,8 @@ interface Contact {
 
 interface Message {
   id: string;
-  type: 'user' | 'assistant' | 'confirmation';
-  content: string;
-  participants?: Contact[];
-  timestamp: Date;
+  role: 'assistant' | 'user';
+  content: string[];
 }
 
 interface MeetiniChatProps {
@@ -26,155 +24,163 @@ interface MeetiniChatProps {
 }
 
 export default function MeetiniChat({ isOpen, onClose, onSuccess, initialPrompt }: MeetiniChatProps) {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<Message[]>([{
+    role: 'assistant',
+    content: ['Hi! I can help you schedule a meeting. Just tell me who you want to meet with and any other details you\'d like to include.'],
+    id: 'initial'
+  }]);
   const [inputValue, setInputValue] = useState(initialPrompt || '');
   const [isProcessing, setIsProcessing] = useState(false);
   const [selectedContacts, setSelectedContacts] = useState<Contact[]>([]);
   const [suggestedContacts, setSuggestedContacts] = useState<Contact[]>([]);
+  const [threadId, setThreadId] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
-  
-  // Initial greeting when the chat opens
-  useEffect(() => {
-    if (isOpen) {
-      setMessages([{
-        id: '1',
-        type: 'assistant',
-        content: 'Hi! I can help you schedule a meeting. Just tell me who you want to meet with and any other details you\'d like to include.',
-        timestamp: new Date()
-      }]);
-    }
-  }, [isOpen]);
 
-  // Scroll to bottom when messages update
-  useEffect(() => {
+  const scrollToBottom = () => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
   }, [messages]);
 
-  const handleSendMeetini = async () => {
-    if (selectedContacts.length === 0) {
-      addMessage({
-        type: 'assistant',
-        content: 'Please mention who you\'d like to meet with first.'
-      });
-      return;
-    }
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inputValue.trim() || isProcessing) return;
 
+    const userMessage = inputValue.trim();
+    console.log('Sending message:', userMessage);
+    
+    // Add user message immediately
+    setMessages(prev => [...prev, {
+      role: 'user',
+      content: [userMessage],
+      id: Date.now().toString()
+    }]);
+    
+    setInputValue('');
     setIsProcessing(true);
+
     try {
-      const userMessage = messages.filter(m => m.type === 'user').map(m => m.content).join(' ');
       const response = await fetch('/api/assistant/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: userMessage,
-          threadId: null // Start a new thread
-        }),
+          threadId
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to send message');
+      }
+
+      const data = await response.json();
+      console.log('Assistant response:', data);
+      
+      setThreadId(data.threadId);
+
+      // Convert OpenAI messages to our format
+      const newMessages = data.messages.map((msg: any) => ({
+        role: msg.role,
+        content: msg.content.map((c: any) => c.text.value),
+        id: msg.id
+      }));
+
+      setMessages(newMessages.reverse()); // OpenAI returns newest first
+
+    } catch (error) {
+      console.error('Failed to process message:', error);
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: ['Sorry, I encountered an error. Please try again.'],
+        id: 'error-' + Date.now()
+      }]);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleSendMeetini = async () => {
+    if (selectedContacts.length === 0) {
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: ['Please mention who you\'d like to meet with first.'],
+        id: 'error-' + Date.now()
+      }]);
+      return;
+    }
+
+    setIsProcessing(true);
+    try {
+      // Send to AI-create endpoint
+      const response = await fetch('/api/meetini/ai-create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: `Please schedule this meeting with ${selectedContacts.map(c => c.name).join(', ')}`,
+          participants: selectedContacts.map(c => c.email)
+        })
       });
 
       if (!response.ok) {
         throw new Error('Failed to create Meetini');
       }
 
-      addMessage({
-        type: 'confirmation',
-        content: '✨ Perfect! I\'ve sent the calendar invites to everyone. You\'ll receive a confirmation email shortly.'
+      const data = await response.json();
+      if (data.error) {
+        throw new Error(data.error);
+      }
+
+      // Use the suggested times from the Assistant
+      if (!data.suggestedTimes?.length) {
+        throw new Error('No suggested times available. Please try again.');
+      }
+
+      // Create the calendar event with the suggested time
+      const createResponse = await fetch('/api/meetini/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          invite: {
+            type: `Please schedule this meeting with ${selectedContacts.map(c => c.name).join(', ')}`,
+            participants: selectedContacts.map(c => ({ email: c.email })),
+            suggestedTimes: data.suggestedTimes,
+            createdBy: 'user' // Replace with actual user email
+          }
+        })
       });
+
+      if (!createResponse.ok) {
+        const error = await createResponse.json();
+        throw new Error(error.error || 'Failed to create calendar event');
+      }
+
+      // Add success message
+      setMessages(prev => [
+        ...prev,
+        { role: 'assistant', content: ['✨ Success! Calendar invites have been sent.'] }
+      ]);
+
+      // Clear input and reset state
+      setInputValue('');
+      setSelectedContacts([]);
 
       setTimeout(() => {
         onSuccess();
         onClose();
       }, 2000);
+
     } catch (error) {
-      addMessage({
-        type: 'assistant',
-        content: 'Sorry, something went wrong. Please try again.'
-      });
+      console.error('Failed to create Meetini:', error);
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: ['Sorry, something went wrong. Please try again.'],
+        id: 'error-' + Date.now()
+      }]);
     } finally {
       setIsProcessing(false);
     }
-  };
-
-  const handleUserInput = async () => {
-    if (!inputValue.trim()) return;
-
-    // Add user message
-    addMessage({
-      type: 'user',
-      content: inputValue
-    });
-
-    setInputValue('');
-    setIsProcessing(true);
-
-    try {
-      // Extract potential participants from the message
-      const response = await fetch('/api/contacts/search', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: inputValue }),
-      });
-
-      const data = await response.json();
-      const contacts: Contact[] = data.contacts || [];
-
-      if (contacts.length > 0) {
-        setSuggestedContacts(contacts);
-
-        // If this is the first message with contacts
-        if (selectedContacts.length === 0) {
-          addMessage({
-            type: 'assistant',
-            content: `Great! I've found ${contacts.length} contact${contacts.length > 1 ? 's' : ''}. Would you like me to:
-1. Send a Meetini now (I'll use AI to figure out the best time and type of meeting)
-2. Provide more details about the meeting`,
-            participants: contacts
-          });
-        }
-      } else if (inputValue.toLowerCase().includes('send') || inputValue.toLowerCase().includes('now')) {
-        // User wants to send the Meetini
-        await handleSendMeetini();
-      } else {
-        // Process the input for meeting details
-        addMessage({
-          type: 'assistant',
-          content: 'Got it! You can keep adding details, or click "Send Meetini" when you\'re ready. I\'ll figure out the best time and format based on everything you\'ve told me.'
-        });
-      }
-    } catch (error) {
-      addMessage({
-        type: 'assistant',
-        content: 'Sorry, I had trouble processing that. Please try again.'
-      });
-    } finally {
-      setIsProcessing(false);
-    }
-  };
-
-  const addMessage = (message: Omit<Message, 'id' | 'timestamp'>) => {
-    setMessages(prev => [...prev, {
-      ...message,
-      id: Math.random().toString(),
-      timestamp: new Date()
-    }]);
-  };
-
-  const toggleContact = (contact: Contact) => {
-    setSelectedContacts(prev => {
-      const isSelected = prev.some(c => c.email === contact.email);
-      if (isSelected) {
-        return prev.filter(c => c.email !== contact.email);
-      } else {
-        return [...prev, contact];
-      }
-    });
-  };
-
-  const getInitials = (name: string) => {
-    return name
-      .split(' ')
-      .map(word => word[0])
-      .join('')
-      .toUpperCase();
   };
 
   if (!isOpen) return null;
@@ -204,66 +210,20 @@ export default function MeetiniChat({ isOpen, onClose, onSuccess, initialPrompt 
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0 }}
-                  className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}
+                  className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
                 >
                   <div
                     className={`max-w-[80%] rounded-lg p-3 ${
-                      message.type === 'user'
+                      message.role === 'user'
                         ? 'bg-[#22c55e] text-white'
-                        : message.type === 'confirmation'
-                        ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100'
-                        : 'bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-white'
+                        : message.role === 'assistant'
+                        ? 'bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-white'
+                        : 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100'
                     }`}
                   >
-                    <div className="whitespace-pre-wrap">{message.content}</div>
-                    {message.participants && (
-                      <div className="mt-4 space-y-2">
-                        <div className="text-sm font-medium opacity-80">Suggested Contacts:</div>
-                        <div className="grid grid-cols-1 gap-2 max-h-48 overflow-y-auto">
-                          {message.participants.map((contact) => (
-                            <div
-                              key={contact.email}
-                              onClick={() => toggleContact(contact)}
-                              className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition-colors ${
-                                selectedContacts.some(c => c.email === contact.email)
-                                  ? 'bg-[#22c55e]/20 hover:bg-[#22c55e]/30'
-                                  : 'hover:bg-gray-100 dark:hover:bg-gray-800'
-                              }`}
-                            >
-                              <div className="flex items-center space-x-3">
-                                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ${
-                                  selectedContacts.some(c => c.email === contact.email)
-                                    ? 'bg-[#22c55e] text-white'
-                                    : 'bg-gray-200 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
-                                }`}>
-                                  {getInitials(contact.name)}
-                                </div>
-                                <div>
-                                  <div className="font-medium">{contact.name}</div>
-                                  <div className="text-xs text-gray-500">{contact.email}</div>
-                                </div>
-                              </div>
-                              <div className="flex items-center space-x-2">
-                                {contact.frequency && (
-                                  <span className="text-xs text-gray-500">
-                                    {contact.frequency} meetings
-                                  </span>
-                                )}
-                                {selectedContacts.some(c => c.email === contact.email) ? (
-                                  <svg className="w-5 h-5 text-[#22c55e]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                                  </svg>
-                                ) : (
-                                  <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                                  </svg>
-                                )}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
+                    {message.content.map((text, i) => (
+                      <div key={i} className="whitespace-pre-wrap">{text}</div>
+                    ))}
                   </div>
                 </motion.div>
               ))}
@@ -278,7 +238,7 @@ export default function MeetiniChat({ isOpen, onClose, onSuccess, initialPrompt 
                 type="text"
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && handleUserInput()}
+                onKeyPress={(e) => e.key === 'Enter' && handleSubmit(e)}
                 placeholder="Type your message..."
                 className="flex-1 p-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
                 disabled={isProcessing}
@@ -300,7 +260,7 @@ export default function MeetiniChat({ isOpen, onClose, onSuccess, initialPrompt 
                   >
                     <span>{contact.name}</span>
                     <button
-                      onClick={() => toggleContact(contact)}
+                      onClick={() => setSelectedContacts(prev => prev.filter(c => c.email !== contact.email))}
                       className="hover:text-[#22c55e]/80 dark:hover:text-[#22c55e]/80"
                     >
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

@@ -58,14 +58,37 @@ export default async function handler(
       }
     });
 
-    // If we have any Meetini users, create calendar events
-    if (meetiniUsers.length > 0 && invite.suggestedTimes?.length) {
-      await createCalendarEvents(
-        invite,
-        meetiniUsers,
-        session,
-        newInvite.id
-      );
+    // If we have any Meetini users, use the Assistant to find optimal times
+    if (meetiniUsers.length > 0) {
+      // Send to AI-create endpoint to get optimal times
+      const aiResponse = await fetch('http://localhost:3002/api/meetini/ai-create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: `Please help schedule a ${invite.type || 'meeting'} with ${meetiniUsers.join(', ')}. ${
+            invite.title ? `The title is: ${invite.title}.` : ''
+          } ${invite.location ? `The location is: ${invite.location}.` : ''}`,
+          participants: meetiniUsers
+        })
+      });
+
+      if (!aiResponse.ok) {
+        throw new Error('Failed to get optimal times from Assistant');
+      }
+
+      const aiData = await aiResponse.json();
+      if (aiData.error) {
+        throw new Error(aiData.error);
+      }
+
+      // Update the invite with the Assistant's suggestions
+      await prisma.meetiniInvite.update({
+        where: { id: newInvite.id },
+        data: {
+          proposedTimes: aiData.suggestedTimes || [],
+          location: aiData.location || invite.location
+        }
+      });
     }
 
     // Send appropriate emails

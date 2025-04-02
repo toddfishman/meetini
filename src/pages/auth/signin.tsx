@@ -43,7 +43,7 @@ export default function SignIn() {
   const handleSignIn = async () => {
     try {
       await signIn('google', { 
-        callbackUrl: '/dashboard',
+        callbackUrl: callbackUrl as string || '/dashboard',
         scope: [
           'openid',
           'https://www.googleapis.com/auth/userinfo.email',

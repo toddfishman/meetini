@@ -1,6 +1,9 @@
 import NextAuth, { NextAuthOptions, User } from 'next-auth';
 import GoogleProvider from 'next-auth/providers/google';
 import { JWT } from 'next-auth/jwt';
+import { PrismaClient } from '@prisma/client';
+
+const prisma = new PrismaClient();
 
 const SCOPES = [
   'openid',
@@ -27,6 +30,11 @@ interface ExtendedToken extends JWT {
 }
 
 export const authOptions: NextAuthOptions = {
+  debug: true,
+  pages: {
+    error: '/auth/error',
+    signIn: '/auth/signin'
+  },
   providers: [
     GoogleProvider({
       clientId: process.env.GOOGLE_CLIENT_ID!,
@@ -55,6 +63,64 @@ export const authOptions: NextAuthOptions = {
           hasExpiresIn: !!account.expires_in,
           scopes: account.scope?.split(' ')
         });
+
+        // Store calendar credentials in database
+        if (account.access_token && account.refresh_token) {
+          try {
+            const result = await prisma.user.upsert({
+              where: { email: user.email! },
+              create: {
+                email: user.email!,
+                name: user.name,
+                image: user.image,
+                calendarAccounts: {
+                  create: {
+                    provider: 'google',
+                    accessToken: account.access_token,
+                    refreshToken: account.refresh_token,
+                    expiresAt: new Date(Date.now() + (account.expires_in! * 1000))
+                  }
+                }
+              },
+              update: {
+                name: user.name,
+                image: user.image,
+                calendarAccounts: {
+                  upsert: {
+                    where: {
+                      userId_provider: {
+                        userId: token.sub!,
+                        provider: 'google'
+                      }
+                    },
+                    create: {
+                      provider: 'google',
+                      accessToken: account.access_token,
+                      refreshToken: account.refresh_token,
+                      expiresAt: new Date(Date.now() + (account.expires_in! * 1000))
+                    },
+                    update: {
+                      accessToken: account.access_token,
+                      refreshToken: account.refresh_token,
+                      expiresAt: new Date(Date.now() + (account.expires_in! * 1000))
+                    }
+                  }
+                }
+              },
+              include: {
+                calendarAccounts: true
+              }
+            });
+
+            console.log('User upserted:', {
+              id: result.id,
+              email: result.email,
+              hasCalendarAccount: result.calendarAccounts.length > 0
+            });
+          } catch (error) {
+            console.error('Failed to store calendar credentials:', error);
+          }
+        }
 
         const expires_in = account.expires_in ? Number(account.expires_in) : 3600;
         return {

@@ -959,11 +959,42 @@ export default function Dashboard() {
         }))
       ];
 
-      // Format date and time
-      const startDateTime = new Date(`${meetingDetails.startDate}T${meetingDetails.startTime}`);
-      const endDateTime = new Date(startDateTime.getTime() + meetingDetails.duration * 60000);
+      // First, get optimal times from the Assistant
+      const aiResponse = await fetch('/api/meetini/ai-create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: prompt || 'Please schedule a meeting',
+          participants: participants.map(p => p.email)
+        })
+      });
 
-      // Make the API request
+      if (!aiResponse.ok) {
+        const error = await aiResponse.json();
+        throw new Error(error.error || 'Failed to get meeting suggestions');
+      }
+
+      const aiData = await aiResponse.json();
+      if (aiData.error) {
+        throw new Error(aiData.error);
+      }
+
+      // Use the suggested times from the Assistant
+      if (!aiData.suggestedTimes?.length) {
+        const errorMessage = aiData.error?.details || 'No suggested times available. Please try again.';
+        throw new Error(errorMessage);
+      }
+
+      // Show the Assistant's response
+      if (aiData.messages?.length > 0) {
+        const lastMessage = aiData.messages[0]; // OpenAI returns newest first
+        setMeetingSummary(prev => ({
+          ...prev,
+          message: lastMessage.content.map((c: any) => c.text.value).join('\n')
+        }));
+      }
+
+      // Make the calendar API request with the suggested time
       const response = await fetch('/api/meetini/create', {
         method: 'POST',
         headers: { 
@@ -978,19 +1009,11 @@ export default function Dashboard() {
               ? `${meetingDetails.notes}\n\nCreated via Meetini${prompt ? `\nOriginal prompt: ${prompt}` : ''}`
               : `Created via Meetini${prompt ? `\nOriginal prompt: ${prompt}` : ''}`,
             participants,
-            startTime: startDateTime.toISOString(),
-            endTime: endDateTime.toISOString(),
-            duration: meetingDetails.duration,
+            suggestedTimes: aiData.suggestedTimes,
             location: meetingDetails.location || (meetingDetails.preferences.virtual ? 'Virtual' : undefined),
-            priority: meetingDetails.priority,
-            preferences: {
-              virtual: meetingDetails.preferences.virtual,
-              inPerson: meetingDetails.preferences.inPerson,
-              flexible: meetingDetails.preferences.flexible
-            },
             createdBy: session.user.email
           }
-        }),
+        })
       });
 
       const data = await response.json();
