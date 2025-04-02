@@ -384,8 +384,8 @@ export async function createCalendarEvent(
   }
 ): Promise<string> {
   const token = await getToken({ req });
-  if (!token?.access_token) {
-    throw new Error('No calendar access token');
+  if (!token?.accessToken) {
+    throw new Error('No calendar access. Please sign in with Google Calendar permissions to schedule meetings.');
   }
 
   const auth = new google.auth.OAuth2(
@@ -394,8 +394,8 @@ export async function createCalendarEvent(
   );
 
   auth.setCredentials({
-    access_token: token.access_token,
-    refresh_token: token.refresh_token,
+    access_token: token.accessToken,
+    refresh_token: token.refreshToken,
     token_type: 'Bearer',
     expiry_date: token.accessTokenExpires
   });

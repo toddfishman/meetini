@@ -971,12 +971,14 @@ export default function Dashboard() {
 
       if (!aiResponse.ok) {
         const error = await aiResponse.json();
-        throw new Error(error.error || 'Failed to get meeting suggestions');
+        const errorMessage = error.details || error.error || 'Failed to get meeting suggestions';
+        throw new Error(errorMessage);
       }
 
       const aiData = await aiResponse.json();
       if (aiData.error) {
-        throw new Error(aiData.error);
+        const errorMessage = aiData.error.details || aiData.error || 'Failed to process meeting request';
+        throw new Error(errorMessage);
       }
 
       // Use the suggested times from the Assistant

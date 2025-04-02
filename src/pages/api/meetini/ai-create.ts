@@ -31,14 +31,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!message) return res.status(400).json({ error: 'Message is required' });
     if (!participants?.length) return res.status(400).json({ error: 'At least one participant is required' });
 
+    // Check for calendar access token
+    const token = await getServerSession(req, res, authOptions);
+    if (!token?.user?.email) {
+      return res.status(401).json({
+        error: 'Calendar access required',
+        details: 'Please sign in with Google Calendar permissions to schedule meetings.'
+      });
+    }
+
     const thread = await openai.beta.threads.create();
 
-    let run = await openai.beta.threads.messages.create(thread.id, {
+    // First create the message
+    await openai.beta.threads.messages.create(thread.id, {
       role: 'user',
       content: message
     });
 
-    run = await openai.beta.threads.runs.create(thread.id, {
+    // Then create the run
+    let run = await openai.beta.threads.runs.create(thread.id, {
       assistant_id: process.env.OPENAI_ASSISTANT_ID!,
       instructions: `You are a scheduling assistant. Parse meeting prompts, extract participants and preferences, check availability, and suggest optimal times.
 
@@ -73,12 +84,23 @@ Please:
       const toolCalls = completedRun.required_action?.submit_tool_outputs.tool_calls;
       if (!toolCalls?.length) break;
 
-      // Clear tool outputs for each batch
+      // Create a map of required tool call IDs
+      const requiredToolCallIds = new Set(toolCalls.map(call => call.id));
       toolOutputs = [];
 
       for (const toolCall of toolCalls) {
         const functionName = toolCall.function.name;
-        const args = JSON.parse(toolCall.function.arguments);
+        let args;
+        try {
+          args = JSON.parse(toolCall.function.arguments);
+        } catch (err) {
+          console.error(`Failed to parse arguments for ${functionName}:`, err);
+          toolOutputs.push({
+            tool_call_id: toolCall.id,
+            output: JSON.stringify({ error: 'Invalid arguments', details: 'Failed to parse function arguments' })
+          });
+          continue;
+        }
 
         if (functionName in availableFunctions) {
           try {
@@ -111,9 +133,32 @@ Please:
               output: JSON.stringify({ error: 'Function failed', details: err instanceof Error ? err.message : 'Unknown error' })
             });
           }
+        } else {
+          // Handle unknown function
+          toolOutputs.push({
+            tool_call_id: toolCall.id,
+            output: JSON.stringify({ error: 'Unknown function', details: `Function ${functionName} is not available` })
+          });
         }
       }
 
+      // Verify we have outputs for all required tool calls
+      const missingToolCalls = Array.from(requiredToolCallIds).filter(
+        id => !toolOutputs.some(output => output.tool_call_id === id)
+      );
+
+      if (missingToolCalls.length > 0) {
+        console.error('Missing tool outputs for:', missingToolCalls);
+        // Add error outputs for missing tool calls
+        for (const id of missingToolCalls) {
+          toolOutputs.push({
+            tool_call_id: id,
+            output: JSON.stringify({ error: 'Function execution failed', details: 'No output generated' })
+          });
+        }
+      }
+
+      // Submit all tool outputs
       completedRun = await openai.beta.threads.runs.submitToolOutputs(thread.id, run.id, {
         tool_outputs: toolOutputs
       });
@@ -154,9 +199,22 @@ async function waitForRunCompletion(threadId: string, runId: string) {
   let attempts = 0;
   while (attempts < 60) {
     const run = await openai.beta.threads.runs.retrieve(threadId, runId);
-    if (['completed', 'requires_action', 'failed'].includes(run.status)) return run;
+    
+    if (run.status === 'failed') {
+      console.error('Run failed:', run.last_error);
+      throw new Error(`Assistant run failed: ${run.last_error?.code}: ${run.last_error?.message}`);
+    }
+    
+    if (run.status === 'completed' || run.status === 'requires_action') {
+      return run;
+    }
+
+    if (run.status === 'expired') {
+      throw new Error('Assistant run expired');
+    }
+
     await new Promise(resolve => setTimeout(resolve, 1000));
     attempts++;
   }
-  throw new Error('Run timed out');
+  throw new Error('Assistant run timed out after 60 seconds');
 }
