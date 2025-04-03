@@ -2,8 +2,13 @@ import { Resend } from 'resend';
 import twilio from 'twilio';
 import { formatInTimeZone } from 'date-fns-tz';
 
-// Initialize Twilio client only if credentials are available
-const twilioClient = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN
+// Initialize Twilio client only if credentials are available and valid
+const isTwilioConfigured = process.env.TWILIO_ACCOUNT_SID && 
+                          process.env.TWILIO_AUTH_TOKEN && 
+                          process.env.TWILIO_ACCOUNT_SID.startsWith('AC');
+
+// Only initialize if we have valid credentials
+const twilioClient = isTwilioConfigured
   ? twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
   : null;
 
@@ -142,7 +147,7 @@ END:VCALENDAR`;
       timestamp: new Date().toISOString()
     });
 
-    if (!result?.id) {
+    if (!result?.data?.id) {
       throw new Error('Failed to send email - no confirmation ID received');
     }
 

@@ -1265,6 +1265,7 @@ export default function Dashboard() {
   const handleSavePreferences = useCallback(async () => {
     setIsSaving(true);
     try {
+      // Save to general preferences
       const response = await fetch('/api/preferences', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1273,6 +1274,23 @@ export default function Dashboard() {
 
       if (!response.ok) {
         throw new Error('Failed to save preferences');
+      }
+
+      // Also save calendar-specific preferences
+      const calendarPreferencesData = {
+        workDays: preferences.workDays,
+        workingHours: preferences.workingHours,
+        timezone: preferences.timezone
+      };
+      
+      const calendarResponse = await fetch('/api/calendar/preferences', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(calendarPreferencesData),
+      });
+
+      if (!calendarResponse.ok) {
+        console.warn('Failed to save calendar preferences');
       }
 
       setToastState({

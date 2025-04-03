@@ -91,6 +91,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       reminders: {
         useDefault: true,
       },
+      status: 'confirmed',
+      transparency: 'opaque',
       guestsCanModify: false,
       guestsCanInviteOthers: false,
       sendUpdates: 'all',

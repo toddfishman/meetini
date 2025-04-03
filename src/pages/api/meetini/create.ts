@@ -92,7 +92,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // Create calendar event with Meet link for virtual meetings
+    // If no conflicts, create the calendar event
     let event;
     try {
       event = await calendarService.createEvent({
@@ -116,7 +116,80 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       throw new Error('Failed to create calendar event with valid start time');
     }
 
-    // Save invite to database
+    // Check for recent invitations that might not be reflected in Google Calendar yet
+    const oneHourAgo = new Date(new Date().getTime() - 60 * 60 * 1000);
+    const startDateTime = new Date(invite.suggestedTimes[0]);
+    const endDateTime = new Date(startDateTime);
+    endDateTime.setMinutes(endDateTime.getMinutes() + 30); // Default 30 minutes
+    
+    console.log(`Checking for conflicts at time: ${startDateTime.toISOString()} - ${endDateTime.toISOString()}`);
+    
+    const recentInvitations = await prisma.invitation.findMany({
+      where: {
+        OR: [
+          {
+            createdBy: {
+              in: invite.participants.map(p => p.email)
+            }
+          },
+          {
+            participants: {
+              some: {
+                email: {
+                  in: invite.participants.map(p => p.email)
+                }
+              }
+            }
+          }
+        ],
+        createdAt: {
+          gte: oneHourAgo
+        }
+      },
+      include: {
+        participants: true
+      }
+    });
+    
+    console.log(`Found ${recentInvitations.length} recent invitations to check for conflicts`);
+    
+    // Check each invitation for conflicts
+    for (const invitation of recentInvitations) {
+      console.log(`Checking invitation ${invitation.id}, proposedTimes: ${invitation.proposedTimes?.length || 0}`);
+      
+      // Start with proposedTimes
+      if (invitation.proposedTimes && invitation.proposedTimes.length > 0) {
+        for (const proposedTime of invitation.proposedTimes) {
+          const proposedEndTime = new Date(proposedTime);
+          proposedEndTime.setMinutes(proposedEndTime.getMinutes() + 30);
+          
+          if (
+            (startDateTime >= proposedTime && startDateTime < proposedEndTime) ||
+            (endDateTime > proposedTime && endDateTime <= proposedEndTime) ||
+            (startDateTime <= proposedTime && endDateTime >= proposedEndTime)
+          ) {
+            throw new Error(`Scheduling conflict detected with a recent meeting for ${invitation.participants.map(p => p.email).join(', ')}`);
+          }
+        }
+      }
+      
+      // If proposedTimes is empty but calendarEventId exists, use createdAt as fallback
+      if ((!invitation.proposedTimes || invitation.proposedTimes.length === 0) && invitation.calendarEventId) {
+        const createdTime = invitation.createdAt;
+        const createdEndTime = new Date(createdTime);
+        createdEndTime.setMinutes(createdEndTime.getMinutes() + 30);
+        
+        if (
+          (startDateTime >= createdTime && startDateTime < createdEndTime) ||
+          (endDateTime > createdTime && endDateTime <= createdEndTime) ||
+          (startDateTime <= createdTime && endDateTime >= createdEndTime)
+        ) {
+          throw new Error(`Scheduling conflict detected with a recent meeting for ${invitation.participants.map(p => p.email).join(', ')}`);
+        }
+      }
+    }
+
+    // Save invite to database with proper proposedTimes
     const dbInvite = await prisma.invitation.create({
       data: {
         title: eventTitle,
@@ -124,7 +197,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         status: 'pending',
         createdBy: session.user.email,
         calendarEventId: event.id,
-        proposedTimes: invite.suggestedTimes ? invite.suggestedTimes.map(time => new Date(time)) : [],
+        proposedTimes: invite.suggestedTimes ? invite.suggestedTimes.map(time => new Date(time)) : [startDateTime], // Ensure we always have at least one time
         participants: {
           create: invite.participants.map((p: MeetiniParticipant) => ({
             email: p.email,

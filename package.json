@@ -6,7 +6,7 @@
     "seed": "ts-node --project prisma/tsconfig.json prisma/seed.ts"
   },
   "scripts": {
-    "dev": "next dev -p 3002",
+    "dev": "next dev -p 3004",
     "build": "prisma generate && next build",
     "start": "next start",
     "lint": "next lint"
@@ -21,7 +21,7 @@
     "@mui/icons-material": "^6.4.8",
     "@mui/material": "^6.4.8",
     "@mui/x-date-pickers": "^7.28.0",
-    "@prisma/client": "^6.3.0",
+    "@prisma/client": "^6.5.0",
     "@simplewebauthn/browser": "^13.1.0",
     "@simplewebauthn/server": "^13.1.1",
     "@simplewebauthn/typescript-types": "^8.3.4",
@@ -60,7 +60,7 @@
     "eslint": "^9",
     "eslint-config-next": "15.1.4",
     "postcss": "^8.5.3",
-    "prisma": "^6.3.0",
+    "prisma": "^6.5.0",
     "tailwindcss": "^3.4.17",
     "ts-node": "^10.9.2",
     "typescript": "^5"

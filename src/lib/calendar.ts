@@ -419,6 +419,8 @@ export async function createCalendarEvent(
         conferenceSolutionKey: { type: 'hangoutsMeet' },
       },
     } : undefined,
+    status: 'confirmed',
+    transparency: 'opaque',
     guestsCanModify: true,
     guestsCanInviteOthers: false,
     guestsCanSeeOtherGuests: true,

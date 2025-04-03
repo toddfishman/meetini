@@ -17,4 +17,4 @@ export const openai = new OpenAI({
 });
 
 export const ASSISTANT_ID = process.env.OPENAI_ASSISTANT_ID;
-export const MODEL = process.env.OPENAI_MODEL || 'gpt-4-turbo';
+export const MODEL = process.env.OPENAI_MODEL || 'gpt-4-turbo-preview';

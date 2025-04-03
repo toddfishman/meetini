@@ -43,6 +43,15 @@ export const MEETING_TERMS = {
   ]
 };
 
+/**
+ * Converts a string to title case (first letter of each word capitalized)
+ */
+function titleCase(str: string): string {
+  return str.toLowerCase().split(' ').map(word => 
+    word.charAt(0).toUpperCase() + word.slice(1)
+  ).join(' ');
+}
+
 // Common words that often appear in meeting requests but aren't names
 const COMMON_WORDS = new Set([
   'meet', 'meeting', 'schedule', 'with', 'and', 'setup', 'set', 'up', 'organize',
@@ -52,7 +61,7 @@ const COMMON_WORDS = new Set([
   'saturday', 'sunday', 'minutes', 'hour', 'hours', 'virtual', 'in-person',
   'coffee', 'lunch', 'dinner', 'breakfast', 'please', 'would', 'like', 'want',
   'need', 'must', 'should', 'could', 'can', 'will', 'about', 'regarding',
-  'concerning', 'quick', 'brief', 'long', 'short'
+  'concerning', 'quick', 'brief', 'long', 'short', 'late', 'early'
 ]);
 
 // Extracted name with its position in the input
@@ -213,8 +222,25 @@ export function extractNames(text: string): string[] {
   let currentGroup: string[] = [];
   let groupStart = -1;
 
+  // Special handling for time-related phrases
+  const timeRelatedPhrases = [
+    'late next week', 'early next week', 'late this week', 'early this week',
+    'next week', 'this week', 'next month', 'this month'
+  ];
+  
+  // Check if the full text contains any of these phrases and skip processing if it does
+  const lowerText = text.toLowerCase();
+  if (timeRelatedPhrases.some(phrase => lowerText.includes(phrase))) {
+    // If the query is primarily about time preferences, don't extract names
+    // Simply return an empty array to indicate no contacts should be searched
+    if (text.split(' ').length <= 5) { // Short query primarily about time
+      console.log('Time-related phrase detected, skipping name extraction:', text);
+      return [];
+    }
+  }
+
   // Split and normalize input
-  const words = text.toLowerCase().split(/\s+/).map(w => w.trim());
+  const words = lowerText.split(/\s+/).map(w => w.trim());
   
   // Only process if we have actual words
   if (words.length === 0 || words[0].length < 2) {

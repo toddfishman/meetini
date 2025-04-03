@@ -126,8 +126,8 @@ async function createCalendarEvents(
         end: { dateTime: endTime },
         attendees: meetiniUsers.map(email => ({ email })),
         location: invite.location,
-        status: 'tentative',
-        transparency: 'tentative'
+        status: 'confirmed',
+        transparency: 'opaque'
       };
 
       try {

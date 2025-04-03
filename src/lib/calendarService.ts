@@ -159,6 +159,8 @@ export class CalendarService {
       reminders: {
         useDefault: true
       },
+      status: 'confirmed',
+      transparency: 'opaque',
       guestsCanModify: true,
       guestsCanInviteOthers: true,
       guestsCanSeeOtherGuests: true
