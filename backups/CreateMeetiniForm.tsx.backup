@@ -70,7 +70,7 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
     { label: 'Analyzing your request', percentage: 20 },
     { label: 'Checking calendars', percentage: 40 },
     { label: 'Finding optimal times', percentage: 60 },
-    { label: 'Creating invitation', percentage: 80 },
+    { label: 'Creating calendar events', percentage: 80 },
     { label: 'Sending invitations', percentage: 95 }
   ]);
   const [error, setError] = useState<string | null>(null);
@@ -178,7 +178,7 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
       setProcessingStage(2);
       
       setTimeout(() => {
-        setProcessingStatus('Creating invitation...');
+        setProcessingStatus('Creating calendar events...');
         setProcessingStage(3);
       }, 1000);
 
@@ -213,11 +213,7 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
       setProcessingStage(4);
 
       setTimeout(() => {
-        if (responseData.pendingConfirmation) {
-          setProcessingStatus('✨ Success! Invitation sent pending participant confirmation.');
-        } else {
-          setProcessingStatus('✨ Success! Calendar invites sent.');
-        }
+        setProcessingStatus('✨ Success! Calendar invites sent.');
         setProcessingStage(5);
         
         setTimeout(() => {

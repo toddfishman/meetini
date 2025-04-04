@@ -128,19 +128,61 @@ export default function UserPreferences({
     setError(null);
 
     try {
+      // Clean up preferences object to remove properties not in the database schema
+      const { meetingTypes, virtualPlatforms, ...cleanedPreferences } = preferences;
+      
+      // First save general preferences
       const response = await fetch('/api/preferences', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(preferences),
+        body: JSON.stringify(cleanedPreferences),
       });
 
-      if (!response.ok) throw new Error('Failed to save preferences');
+      let responseData;
+      try {
+        responseData = await response.json();
+      } catch (e) {
+        console.error('Error parsing response:', e);
+      }
+
+      if (!response.ok) {
+        const errorMessage = responseData?.error || 'Failed to save preferences';
+        throw new Error(errorMessage);
+      }
+      
+      // Also save calendar-specific preferences
+      const calendarPreferencesData = {
+        workDays: preferences.workDays,
+        workingHours: preferences.workingHours,
+        timezone: preferences.timezone
+      };
+      
+      const calendarResponse = await fetch('/api/calendar/preferences', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(calendarPreferencesData),
+      });
+      
+      let calendarResponseData;
+      try {
+        calendarResponseData = await calendarResponse.json();
+      } catch (e) {
+        console.error('Error parsing calendar response:', e);
+      }
+      
+      if (!calendarResponse.ok) {
+        const errorMessage = calendarResponseData?.error || 'Failed to save calendar preferences';
+        throw new Error(errorMessage);
+      }
+      
       onClose();
     } catch (error) {
       console.error('Error saving preferences:', error);
-      setError('Failed to save preferences');
+      setError(error instanceof Error ? error.message : 'Failed to save preferences');
     } finally {
       setLoading(false);
     }

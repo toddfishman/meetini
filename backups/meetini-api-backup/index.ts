@@ -188,9 +188,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // Transform the invitations to include the correct type based on the user's perspective
         const transformedInvitations = invitations.map(invitation => ({
           ...invitation,
-          type: invitation.createdBy === token.email ? 'sent' : 'received',
-          // Ensure the status is preserved correctly
-          status: invitation.status || 'pending'
+          type: invitation.createdBy === token.email ? 'sent' : 'received'
         }));
 
         console.log('Transformed invitations:', JSON.stringify(transformedInvitations, null, 2));

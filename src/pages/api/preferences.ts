@@ -13,6 +13,36 @@ interface CustomSession extends Omit<Session, 'user'> {
   };
 }
 
+// List of valid fields in the UserPreferences schema
+const VALID_PREFERENCE_FIELDS = [
+  'workingHours',
+  'workDays',
+  'timezone',
+  'bufferTime',
+  'maxMeetingsPerDay',
+  'focusTimeBlocks',
+  'homeLocation',
+  'officeLocation',
+  'maxTravelTime',
+  'maxTravelDistance',
+  'preferredTransport',
+  'gpsEnabled',
+  'noGoZones',
+  'defaultDuration',
+  'preferredTimes',
+  'virtualMeetingUrl',
+  'defaultMeetingType',
+  'preferredPlatforms',
+  'personalEvents',
+  'mealTimes',
+  'emailNotifications',
+  'smsNotifications',
+  'travelAlerts',
+  'weatherAlerts',
+  'defaultCalendarId',
+  'calendarVisibility'
+];
+
 const defaultPreferences = {
   workingHours: { start: '09:00', end: '17:00' },
   workDays: [1, 2, 3, 4, 5],
@@ -51,12 +81,21 @@ const defaultPreferences = {
   
   // Calendar Settings
   defaultCalendarId: '',
-  calendarVisibility: { work: true, personal: true },
-  
-  // Legacy fields for backward compatibility
-  meetingTypes: ['Virtual', 'In Person'],
-  virtualPlatforms: ['Zoom', 'Google Meet', 'Microsoft Teams']
+  calendarVisibility: { work: true, personal: true }
 };
+
+// Helper function to filter out invalid fields
+function sanitizePreferences(preferences: any) {
+  const sanitized: any = {};
+  
+  for (const field of VALID_PREFERENCE_FIELDS) {
+    if (preferences[field] !== undefined) {
+      sanitized[field] = preferences[field];
+    }
+  }
+  
+  return sanitized;
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const session = (await getServerSession(req, res, authOptions)) as CustomSession | null;
@@ -118,22 +157,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (req.method === 'POST' || req.method === 'PUT') {
     try {
+      console.log('POST/PUT /api/preferences - User:', user.email);
+      
+      // Sanitize input data to only include valid fields
+      const validPreferenceData = sanitizePreferences(req.body);
+      console.log('Sanitized preference data:', validPreferenceData);
+      
       const updatedPreferences = await prisma.userPreferences.upsert({
         where: {
           userId: user.id
         },
         create: {
           userId: user.id,
-          ...defaultPreferences,
-          ...req.body
+          ...sanitizePreferences(defaultPreferences),
+          ...validPreferenceData
         },
-        update: req.body
+        update: validPreferenceData
       });
 
       return res.status(200).json(updatedPreferences);
     } catch (error) {
       console.error('Error updating preferences:', error);
-      return res.status(500).json({ error: 'Failed to update preferences' });
+      return res.status(500).json({ error: 'Failed to update preferences', details: error instanceof Error ? error.message : String(error) });
     }
   }
 

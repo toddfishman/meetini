@@ -296,10 +296,13 @@ function calculateSlotScore(
 }
 
 function getWorkingHours(timePreference?: string, locationType?: string): { start: number; end: number } {
+  // Get user preferences first - this will be used in calendarAvailability.ts
+  // to respect actual user settings before applying these defaults
+  
   // First check location type for specific constraints
   switch (locationType) {
     case 'coffee':
-      return { start: 8, end: 11 };
+      return { start: 9, end: 11 }; // Changed from 8 to 9 to be safer with morning preferences
     case 'restaurant':
       return { start: 11, end: 21 };
     case 'bar':

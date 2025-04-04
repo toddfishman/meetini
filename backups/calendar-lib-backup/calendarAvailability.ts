@@ -21,11 +21,6 @@ interface TimeSlot {
   end: Date;
 }
 
-interface UserWorkingHoursPreference {
-  start?: string;
-  end?: string;
-}
-
 export async function getAvailability(
   req: NextApiRequest,
   participants: string[],
@@ -347,28 +342,13 @@ export async function getAvailability(
   const availableSlots: TimeSlot[] = [];
   let currentTime = new Date(searchStart);
   
-  // Adjust for working hours precision
-  const parseWorkTime = (timeStr: string): {hours: number, minutes: number} => {
-    const [hours, minutes] = timeStr.split(':').map(Number);
-    return { hours, minutes };
-  };
-
-  // Use the existing working hours but ensure we parse the minutes correctly
-  const { hours: workStartHours, minutes: workStartMinutes } = parseWorkTime(`${Math.floor(workStart)}:${Math.round((workStart % 1) * 60).toString().padStart(2, '0')}`);
-  const { hours: workEndHours, minutes: workEndMinutes } = parseWorkTime(`${Math.floor(workEnd)}:${Math.round((workEnd % 1) * 60).toString().padStart(2, '0')}`);
-
-  console.log(`Precise work hours: ${workStartHours}:${workStartMinutes} to ${workEndHours}:${workEndMinutes}`);
-
-  // Ensure we only check hours within work day, respecting minutes for precision
-  if (currentTime.getHours() < workStartHours || 
-      (currentTime.getHours() === workStartHours && currentTime.getMinutes() < workStartMinutes)) {
-    // Set to the exact workStart time, preserving minutes for half-hour preferences
-    currentTime.setHours(workStartHours, workStartMinutes, 0, 0);
-  } else if (currentTime.getHours() > workEndHours || 
-            (currentTime.getHours() === workEndHours && currentTime.getMinutes() >= workEndMinutes)) {
+  // Ensure we only check hours within work day
+  if (currentTime.getHours() < workStart) {
+    currentTime.setHours(workStart, 0, 0, 0);
+  } else if (currentTime.getHours() >= workEnd) {
     // Move to next day's workStart
     currentTime.setDate(currentTime.getDate() + 1);
-    currentTime.setHours(workStartHours, workStartMinutes, 0, 0);
+    currentTime.setHours(workStart, 0, 0, 0);
   }
   
   // Store a list of all slots we checked for debugging
@@ -385,36 +365,16 @@ export async function getAvailability(
     // Skip days that aren't in preferred days, if any preferred days are specified
     if (effectivePreferredDays.length > 0 && !effectivePreferredDays.includes(currentDay)) {
       currentTime = addDays(currentTime, 1);
-      currentTime.setHours(workStartHours, workStartMinutes, 0, 0);
+      currentTime.setHours(workStart, 0, 0, 0);
       continue;
     }
     
-    // Only include times within work hours with precise minute checks
-    const isWithinWorkHours = 
-      (currentTime.getHours() > workStartHours || 
-       (currentTime.getHours() === workStartHours && currentTime.getMinutes() >= workStartMinutes)) && 
-      (currentTime.getHours() < workEndHours || 
-       (currentTime.getHours() === workEndHours && currentTime.getMinutes() < workEndMinutes));
-    
-    if (isWithinWorkHours) {
+    // Only include times within work hours based on preference
+    const hour = currentTime.getHours();
+    if (hour >= workStart && hour < workEnd) {
       // Create slot in user's timezone
       const slotStart = new Date(currentTime);
       const slotEnd = addMinutes(slotStart, duration);
-      
-      // Also check if slot end is within work hours
-      const slotEndHour = slotEnd.getHours();
-      const slotEndMinute = slotEnd.getMinutes();
-      
-      const slotEndIsWithinWorkHours = 
-        (slotEndHour < workEndHours || 
-         (slotEndHour === workEndHours && slotEndMinute <= workEndMinutes));
-      
-      if (!slotEndIsWithinWorkHours) {
-        // Skip to next day if this slot would end after work hours
-        currentTime.setDate(currentTime.getDate() + 1);
-        currentTime.setHours(workStartHours, workStartMinutes, 0, 0);
-        continue;
-      }
       
       // Convert to UTC for comparison with calendar busy times
       const slotStartUTC = zonedTimeToUtc(slotStart, userTimezone);
@@ -524,46 +484,49 @@ export async function getAvailability(
 }
 
 // Helper function to get working hours based on user preferences
-function applyWorkingHoursPreferences(startTime: Date, endTime: Date, workingHours: UserWorkingHoursPreference): { start: Date, end: Date } {
-  const start = new Date(startTime);
-  const end = new Date(endTime);
+function applyWorkingHoursPreferences(accounts: any[], defaultStart: number, defaultEnd: number) {
+  // Start with defaults
+  let workStart = defaultStart;
+  let workEnd = defaultEnd;
   
-  try {
-    if (workingHours.start) {
-      // Parse the hours and minutes
-      const startParts = workingHours.start.split(':');
-      const startHours = parseInt(startParts[0], 10);
-      const startMinutes = startParts.length > 1 ? parseInt(startParts[1], 10) : 0;
-      
-      // If start time is earlier than working hours, adjust to working hours start
-      const currentHours = start.getHours();
-      const currentMinutes = start.getMinutes();
-      
-      if (currentHours < startHours || (currentHours === startHours && currentMinutes < startMinutes)) {
-        start.setHours(startHours, startMinutes, 0, 0);
+  // Find latest start and earliest end from all participants to respect everyone's preferences
+  for (const account of accounts) {
+    if (account.user.calendarPreferences?.workingHours) {
+      const userWorkingHours = account.user.calendarPreferences.workingHours;
+      if (typeof userWorkingHours === 'object') {
+        // Parse start and end times
+        const start = userWorkingHours.start ? parseInt(userWorkingHours.start.split(':')[0]) : null;
+        // Also check minutes for more precise comparisons (e.g., 9:30 should be treated as 9.5)
+        const startMinutes = userWorkingHours.start ? parseInt(userWorkingHours.start.split(':')[1]) : 0;
+        const startDecimal = start !== null ? start + (startMinutes / 60) : null;
+        
+        const end = userWorkingHours.end ? parseInt(userWorkingHours.end.split(':')[0]) : null;
+        const endMinutes = userWorkingHours.end ? parseInt(userWorkingHours.end.split(':')[1]) : 0;
+        const endDecimal = end !== null ? end + (endMinutes / 60) : null;
+        
+        // Always respect the later start time - no meetings before someone's workday starts
+        if (startDecimal !== null && startDecimal > workStart) {
+          console.log(`Adjusting work start time from ${workStart} to ${startDecimal} based on ${account.user.email}'s preferences`);
+          workStart = startDecimal;
+        }
+        
+        // Always respect the earlier end time - no meetings after someone's workday ends
+        if (endDecimal !== null && endDecimal < workEnd) {
+          console.log(`Adjusting work end time from ${workEnd} to ${endDecimal} based on ${account.user.email}'s preferences`);
+          workEnd = endDecimal;
+        }
       }
     }
-    
-    if (workingHours.end) {
-      // Parse the hours and minutes
-      const endParts = workingHours.end.split(':');
-      const endHours = parseInt(endParts[0], 10);
-      const endMinutes = endParts.length > 1 ? parseInt(endParts[1], 10) : 0;
-      
-      // If end time is later than working hours, adjust to working hours end
-      const currentHours = end.getHours();
-      const currentMinutes = end.getMinutes();
-      
-      if (currentHours > endHours || (currentHours === endHours && currentMinutes > endMinutes)) {
-        end.setHours(endHours, endMinutes, 0, 0);
-      }
-    }
-  } catch (error) {
-    console.error('Error parsing working hours preferences:', error);
-    // If there's an error, just return the original times
   }
   
-  return { start, end };
+  // Round workStart up to the nearest half hour and workEnd down to the nearest half hour
+  // This ensures we don't schedule meetings at odd times like 9:13 AM
+  workStart = Math.ceil(workStart * 2) / 2;
+  workEnd = Math.floor(workEnd * 2) / 2;
+  
+  console.log(`Final working hours after adjustment: ${workStart} to ${workEnd}`);
+  
+  return { workStart, workEnd };
 }
 
 // Get time of day description
@@ -656,34 +619,3 @@ async function fetchUserPreferences(participants: string[]) {
     meetingPreferences: pref.user.meetingPreferences
   }));
 }
-
-// This function should check if the hour is after the start working hour,
-// considering minutes for half-hour precision
-const isWithinWorkingHours = (date: Date, workingHours: UserWorkingHoursPreference) => {
-  const hours = date.getHours();
-  const minutes = date.getMinutes();
-  
-  // Parse working hours start
-  let workStartHour = 9; // Default
-  let workStartMinutes = 0;
-  if (workingHours.start) {
-    const startParts = workingHours.start.split(':');
-    workStartHour = parseInt(startParts[0], 10);
-    workStartMinutes = startParts.length > 1 ? parseInt(startParts[1], 10) : 0;
-  }
-  
-  // Parse working hours end
-  let workEndHour = 17; // Default
-  let workEndMinutes = 0;
-  if (workingHours.end) {
-    const endParts = workingHours.end.split(':');
-    workEndHour = parseInt(endParts[0], 10);
-    workEndMinutes = endParts.length > 1 ? parseInt(endParts[1], 10) : 0;
-  }
-  
-  // Compare with proper precision
-  const isAfterOrAtStart = hours > workStartHour || (hours === workStartHour && minutes >= workStartMinutes);
-  const isBeforeOrAtEnd = hours < workEndHour || (hours === workEndHour && minutes <= workEndMinutes);
-  
-  return isAfterOrAtStart && isBeforeOrAtEnd;
-};

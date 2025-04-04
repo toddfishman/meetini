@@ -230,6 +230,16 @@ export function extractNames(text: string): string[] {
   
   // Check if the full text contains any of these phrases and skip processing if it does
   const lowerText = text.toLowerCase();
+  
+  // Check for email addresses first - if there are any, extract them directly
+  const emailRegex = /([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/gi;
+  const emailMatches = text.match(emailRegex);
+  
+  if (emailMatches && emailMatches.length > 0) {
+    console.log('Extracted email addresses:', emailMatches);
+    return emailMatches;
+  }
+  
   if (timeRelatedPhrases.some(phrase => lowerText.includes(phrase))) {
     // If the query is primarily about time preferences, don't extract names
     // Simply return an empty array to indicate no contacts should be searched
