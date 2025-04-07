@@ -1,7 +1,9 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '../auth/[...nextauth]';
-import { prisma } from '@/lib/prisma';
+import { PrismaClient } from '@prisma/client';
+
+const prisma = new PrismaClient();
 
 interface WorkingHours {
   start: string; // HH:mm format
@@ -39,19 +41,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (req.method === 'GET') {
     try {
-      const preferences = await prisma.calendarPreferences.findUnique({
+      // First check for UserPreferences as it takes precedence
+      const userPreferences = await prisma.userPreferences.findUnique({
         where: { userId: user.id },
       });
 
-      if (!preferences) {
+      if (userPreferences) {
+        return res.status(200).json({
+          workDays: userPreferences.workDays || defaultPreferences.workDays,
+          workingHours: userPreferences.workingHours || defaultPreferences.workingHours,
+          timezone: userPreferences.timezone || defaultPreferences.timezone
+        });
+      }
+
+      // Fall back to CalendarPreferences if UserPreferences doesn't exist
+      const calendarPreferences = await prisma.calendarPreferences.findUnique({
+        where: { userId: user.id },
+      });
+
+      if (!calendarPreferences) {
         return res.status(200).json(defaultPreferences);
       }
 
       // Return preferences with defaults for any missing values
       return res.status(200).json({
-        workDays: preferences.workDays || defaultPreferences.workDays,
-        workingHours: preferences.workingHours || defaultPreferences.workingHours,
-        timezone: preferences.timezone || defaultPreferences.timezone
+        workDays: calendarPreferences.workDays || defaultPreferences.workDays,
+        workingHours: calendarPreferences.workingHours || defaultPreferences.workingHours,
+        timezone: calendarPreferences.timezone || defaultPreferences.timezone
       });
     } catch (error) {
       console.error('Failed to fetch calendar preferences:', error);
@@ -78,26 +94,67 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ error: 'Invalid time format' });
       }
 
-      const preferences = await prisma.calendarPreferences.upsert({
+      // Check if UserPreferences exists
+      const userPreferences = await prisma.userPreferences.findUnique({
+        where: { userId: user.id },
+      });
+
+      let updatedPreferences;
+      
+      if (userPreferences) {
+        // Update UserPreferences if it exists
+        console.log('Updating UserPreferences with calendar settings');
+        updatedPreferences = await prisma.userPreferences.update({
+          where: { userId: user.id },
+          data: {
+            workDays,
+            workingHours: workingHours as any, // Type assertion for Prisma JSON handling
+            timezone: timezone || defaultPreferences.timezone,
+          },
+        });
+      } else {
+        // Create UserPreferences if it doesn't exist
+        console.log('Creating new UserPreferences with calendar settings');
+        // Include some reasonable defaults for required fields
+        updatedPreferences = await prisma.userPreferences.create({
+          data: {
+            userId: user.id,
+            workDays,
+            workingHours: workingHours as any, // Type assertion for Prisma JSON handling
+            timezone: timezone || defaultPreferences.timezone,
+            bufferTime: 15,
+            maxMeetingsPerDay: 8,
+            calendarVisibility: { work: true, personal: true },
+            focusTimeBlocks: [],
+            noGoZones: [],
+            preferredPlatforms: ['Google Meet'],
+            personalEvents: [],
+            mealTimes: [{ type: 'lunch', start: '12:00', end: '13:00' }],
+          },
+        });
+      }
+
+      // For backward compatibility, also update CalendarPreferences
+      await prisma.calendarPreferences.upsert({
         where: { userId: user.id },
         update: {
           workDays,
-          workingHours, // Prisma will handle the JSON serialization
+          workingHours: workingHours as any, // Type assertion for Prisma JSON handling
           timezone: timezone || defaultPreferences.timezone,
         },
         create: {
           userId: user.id,
           workDays,
-          workingHours, // Prisma will handle the JSON serialization
+          workingHours: workingHours as any, // Type assertion for Prisma JSON handling
           timezone: timezone || defaultPreferences.timezone,
         },
       });
 
       // Return the preferences
       return res.status(200).json({
-        workDays: preferences.workDays,
-        workingHours: preferences.workingHours,
-        timezone: preferences.timezone
+        workDays: updatedPreferences.workDays,
+        workingHours: updatedPreferences.workingHours,
+        timezone: updatedPreferences.timezone
       });
     } catch (error) {
       console.error('Failed to update calendar preferences:', error);

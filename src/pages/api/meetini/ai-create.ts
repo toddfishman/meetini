@@ -3,8 +3,9 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '../auth/[...nextauth]';
 import OpenAI from 'openai';
 import { availableFunctions } from '../assistant/chat';
-import { getAvailability } from '../../../lib/calendar/calendarAvailability';
+import { getAvailability, TimeSlot, AvailabilityResponse } from '../../../lib/calendar/calendarAvailability';
 import { PrismaClient } from '@prisma/client';
+import { getToken } from 'next-auth/jwt';
 
 const prisma = new PrismaClient();
 
@@ -21,12 +22,137 @@ const openai = new OpenAI({
 });
 
 interface TimeContext {
-  type: string; // 'specific', 'relative', 'default'
+  type: 'default' | 'specific' | 'range';
   startDate?: string;
   endDate?: string;
-  specificDays?: number[]; // 0-6, where 0 is Sunday
-  timeOfDay?: string; // 'morning', 'afternoon', 'evening', 'all-day'
-  description?: string; // Human readable description of the time context
+  timeOfDay?: string;
+  description?: string;
+  isExplicitlyToday: boolean;
+}
+
+let timePreference: string | undefined;
+let suggestedDuration = 30; // Default 30 minutes
+
+async function validateSchedulingDecision(
+  proposedTime: string,
+  participants: string[],
+  timeContext: TimeContext,
+  req: NextApiRequest
+): Promise<{ isValid: boolean; reason?: string; alternatives?: string[] }> {
+  try {
+    const proposedDate = new Date(proposedTime);
+    if (proposedDate < new Date()) {
+      return { isValid: false, reason: 'Cannot schedule meetings in the past' };
+    }
+    
+    const endTime = new Date(proposedDate);
+    endTime.setHours(endTime.getHours() + 1);
+    
+    // First, check calendar availability
+    const availability = await getAvailability(
+      req,
+      participants,
+      {
+        startDate: proposedDate.toISOString(),
+        endDate: endTime.toISOString()
+      }
+    );
+    
+    // If there's a calendar conflict, look for alternative times
+    if (!availability.success || !availability.availableTimes.length) {
+      // If it's a specific date request, look for other times on the same day
+      if (timeContext.type === 'specific') {
+        const dayStart = new Date(proposedDate);
+        dayStart.setHours(9, 0, 0, 0);
+        const dayEnd = new Date(proposedDate);
+        dayEnd.setHours(17, 0, 0, 0);
+        
+        const dayAvailability = await getAvailability(
+          req,
+          participants,
+          {
+            startDate: dayStart.toISOString(),
+            endDate: dayEnd.toISOString()
+          }
+        );
+        
+        if (dayAvailability.success && dayAvailability.availableTimes.length > 0) {
+          return {
+            isValid: false,
+            reason: `The requested time isn't available, but there are other times available on the same day`,
+            alternatives: dayAvailability.availableTimes.map(slot => slot.start.toISOString())
+          };
+        }
+      }
+      
+      return {
+        isValid: false,
+        reason: availability.warnings?.[0] || 'The requested time conflicts with existing calendar events'
+      };
+    }
+    
+    // For specific date requests, we'll be more lenient with preferences
+    if (timeContext.type === 'specific') {
+      // Still enforce basic working hours (e.g., not at 3 AM)
+      const hour = proposedDate.getHours();
+      if (hour < 7 || hour >= 22) {
+        return { 
+          isValid: false, 
+          reason: 'The requested time is outside reasonable working hours (7 AM - 10 PM)' 
+        };
+      }
+      return { isValid: true };
+    }
+    
+    // For non-specific requests, strictly validate against preferences
+    const isWithinContext = validateTimeAgainstContext(proposedDate, timeContext);
+    if (!isWithinContext) {
+      return { 
+        isValid: false, 
+        reason: 'The proposed time does not match requested time preferences' 
+      };
+    }
+    
+    return { isValid: true };
+  } catch (error) {
+    console.error('Error validating scheduling decision:', error);
+    return { 
+      isValid: false, 
+      reason: 'Error validating scheduling decision' 
+    };
+  }
+}
+
+function validateTimeAgainstContext(
+  proposedDate: Date,
+  timeContext: TimeContext
+): boolean {
+  // If specific dates are provided
+  if (timeContext.startDate && timeContext.endDate) {
+    const start = new Date(timeContext.startDate);
+    const end = new Date(timeContext.endDate);
+    if (proposedDate < start || proposedDate > end) {
+      return false;
+    }
+  }
+  
+  // If time of day preference is provided
+  if (timeContext.timeOfDay) {
+    const hour = proposedDate.getHours();
+    switch (timeContext.timeOfDay) {
+      case 'morning':
+        if (hour < 8 || hour >= 12) return false;
+        break;
+      case 'afternoon':
+        if (hour < 12 || hour >= 17) return false;
+        break;
+      case 'evening':
+        if (hour < 17 || hour >= 21) return false;
+        break;
+    }
+  }
+  
+  return true;
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -68,6 +194,8 @@ TIMEZONE AND SCHEDULING CRITICAL RULES:
 4. NEVER schedule meetings that overlap with existing busy times in calendars
 5. DOUBLE CHECK the proposed time isn't at an inappropriate hour (e.g., 2 AM)
 6. When converting timezones, always verify times are reasonable in the participant's timezone
+7. ALWAYS RESPECT EXACT WORKING HOURS - if a user has set their work day to start at 9:30 AM (not 9:00 AM), NEVER schedule before 9:30 AM
+8. TREAT WORKING HOURS START TIMES AS STRICT BOUNDARIES - a 9:30 AM start means nothing before 9:30 AM, even 9:00 AM is too early
 
 STRICT SCHEDULING RULES - FOLLOW THESE WITHOUT EXCEPTION:
 1. Use the current date (${new Date().toISOString()}) as reference point
@@ -75,6 +203,8 @@ STRICT SCHEDULING RULES - FOLLOW THESE WITHOUT EXCEPTION:
 3. NEVER double-book over existing calendar events
 4. Consider meeting types when determining time slots
 5. ALWAYS check availability before scheduling any meeting
+6. NEVER schedule meetings outside of a user's defined working hours
+7. For users with a 9:30 AM start time preference, never suggest 9:00 AM timeslots
 
 TIME PHRASE INTERPRETATION RULES:
 1. "next week" = Monday-Friday of the following calendar week
@@ -87,7 +217,7 @@ TIME PHRASE INTERPRETATION RULES:
 8. "weekend" = Saturday and Sunday
 
 UNDERSTANDING CONTEXT & MEANING:
-1. EXPLICIT TIME DIRECTIVES: When users specify exact dates/times ("coffee next Thursday"), honor those specific requests while still ensuring availability
+1. EXPLICIT TIME DIRECTIVES: When users specify exact dates/times ("coffee next Thursday"), honor those specific requests while still ensuring availability and respecting their working hours preferences
 2. IMPLICIT CONTEXT: Understand the contextual timing requirements of different events:
    - Fantasy football drafts: Schedule before NFL season starts (early September)
    - Holiday planning: Schedule sufficiently before the holiday
@@ -99,27 +229,28 @@ UNDERSTANDING CONTEXT & MEANING:
    - Business meetings: Typically during work hours
 
 MEETING TYPE TIME PREFERENCES:
-1. Coffee meetings: 8:00 AM - 11:00 AM
-2. Breakfast meetings: 7:30 AM - 9:30 AM
+1. Coffee meetings: 8:00 AM - 11:00 AM (but NEVER before user's defined start time)
+2. Breakfast meetings: 7:30 AM - 9:30 AM (but NEVER before user's defined start time)
 3. Lunch meetings: 11:30 AM - 1:30 PM
 4. Happy hours: 4:00 PM - 6:30 PM
 5. Dinner: 6:00 PM - 8:30 PM
-6. Business/work meetings: 9:00 AM - 5:00 PM
+6. Business/work meetings: 9:00 AM - 5:00 PM (but NEVER before user's defined start time)
 7. Weekend social events: 10:00 AM - 8:00 PM
-8. Team standup meetings: 9:00 AM - 10:30 AM
-9. One-on-one meetings: 9:00 AM - 4:00 PM
+8. Team standup meetings: 9:00 AM - 10:30 AM (but NEVER before user's defined start time)
+9. One-on-one meetings: 9:00 AM - 4:00 PM (but NEVER before user's defined start time)
 
 USER PREFERENCES:
 1. ALWAYS check and prioritize user preferences when scheduling
 2. Working hours preferences should supersede default meeting times
 3. Honor day preferences (like "prefers Tuesdays") when possible
 4. Consider duration preferences for specific meeting types
+5. A user who has set a 9:30 AM start time preference must NEVER be scheduled before 9:30 AM
 
 Default meeting duration is 1 hour unless specified otherwise, with coffee chats typically 30 minutes.
 
 When suggesting times, ALWAYS PRIORITIZE:
 1. Avoiding busy times in calendars
-2. Respecting user preferences
+2. Respecting user preferences, ESPECIALLY exact working hours start times
 3. Daylight hours appropriate for the meeting type
 4. Context-appropriate scheduling (season, holiday, event timing)
 5. Weekdays for business meetings, unless weekend is explicitly requested
@@ -130,11 +261,13 @@ LAST VERIFICATION BEFORE SCHEDULING:
 3. Verify it respects the contextual needs of the meeting type
 4. Make sure the time is converted correctly to the local timezone
 5. Never schedule at odd hours like 2 AM or midnight
+6. Verify that the time respects the user's EXACT working hours (e.g., 9:30 AM start, not 9:00 AM)
 
 Example: For "Coffee with Todd next week", you should:
 - Recognize this as a coffee meeting (morning preference)
 - Check participant availability AND preferences
 - Suggest only available morning slots between 8-11am during business days
+- NEVER schedule before the user's defined start time (e.g., if they prefer 9:30 AM, don't suggest 9:00 AM)
 - Consider Todd's personal preferences if known
 
 Example: For "Fantasy football draft with friends", you should:
@@ -161,6 +294,10 @@ REQUIRED STEPS:
     // Track the extracted time window from OpenAI's responses
     let extractedTimeWindow: { startDate?: string; endDate?: string } | null = null;
 
+    // Track if we're trying to schedule over blocked time
+    let proposedSchedulingTime: string | null = null;
+    let proposedParticipants: string[] = [];
+
     while (completedRun.status === 'requires_action') {
       const toolCalls = completedRun.required_action?.submit_tool_outputs.tool_calls;
       if (!toolCalls?.length) break;
@@ -171,6 +308,14 @@ REQUIRED STEPS:
       for (const toolCall of toolCalls) {
         const functionName = toolCall.function.name;
         const args = JSON.parse(toolCall.function.arguments);
+
+        console.log(`Function ${functionName} called with:`, args);
+
+        // Store the proposed time if this is a scheduleMeeting call
+        if (functionName === 'scheduleMeeting') {
+          proposedSchedulingTime = args.startTime;
+          proposedParticipants = args.participants || [];
+        }
 
         // If a findAvailableTimes call is being made and we have time context,
         // apply our extracted time context to the arguments
@@ -193,14 +338,22 @@ REQUIRED STEPS:
           }
         }
 
-        if (functionName in availableFunctions) {
+        if (functionName === 'findAvailableTimes') {
           try {
-            const result = await availableFunctions[functionName as keyof typeof availableFunctions](args, req, res);
+            const result = await availableFunctions.findAvailableTimes(args, req, res);
             console.log(`Function ${functionName} result:`, result);
 
-            // If the function returns success: false, treat it as an error
-            if (result.success === false) {
-              throw new Error(result.error || 'Function failed');
+            // Type guard to check if result is an AvailabilityResponse
+            const isAvailabilityResponse = (r: any): r is AvailabilityResponse => {
+              return r && typeof r.success === 'boolean' && Array.isArray(r.availableTimes);
+            };
+
+            if (!isAvailabilityResponse(result)) {
+              throw new Error('Invalid availability response format');
+            }
+
+            if (!result.success) {
+              throw new Error(result.warnings?.[0] || 'No available times found');
             }
 
             toolOutputs.push({
@@ -209,26 +362,96 @@ REQUIRED STEPS:
             });
             
             // Store times from findAvailableTimes
-            if (functionName === 'findAvailableTimes' && result.success) {
-              suggestedTimes = result.availableTimes || [];
+            suggestedTimes = result.availableTimes.map(slot => slot.start.toISOString());
 
-              // Save the time window that was used
-              if (args.timeWindow) {
-                extractedTimeWindow = args.timeWindow;
-              }
+            // Save the time window that was used
+            if (args.timeWindow) {
+              extractedTimeWindow = args.timeWindow;
             }
+          } catch (err) {
+            console.error(`Function ${functionName} failed:`, err);
+            toolOutputs.push({
+              tool_call_id: toolCall.id,
+              output: JSON.stringify({ 
+                success: false, 
+                error: err instanceof Error ? err.message : 'Unknown error',
+                warnings: [(err instanceof Error ? err.message : 'Unknown error')]
+              })
+            });
+          }
+        } else if (functionName === 'scheduleMeeting') {
+          try {
+            const result = await availableFunctions.scheduleMeeting(args, req, res);
+            console.log(`Function ${functionName} result:`, result);
+
+            toolOutputs.push({
+              tool_call_id: toolCall.id,
+              output: JSON.stringify(result)
+            });
             
-            // Store the scheduled time
-            if (functionName === 'scheduleMeeting' && result.success) {
+            if (result.success) {
               scheduledTime = args.startTime;
             }
           } catch (err) {
             console.error(`Function ${functionName} failed:`, err);
             toolOutputs.push({
               tool_call_id: toolCall.id,
-              output: JSON.stringify({ error: 'Function failed', details: err instanceof Error ? err.message : 'Unknown error' })
+              output: JSON.stringify({ 
+                success: false, 
+                error: err instanceof Error ? err.message : 'Unknown error' 
+              })
             });
           }
+        } else if (functionName === 'findParticipants') {
+          try {
+            const result = await availableFunctions.findParticipants(args, req, res);
+            console.log(`Function ${functionName} result:`, result);
+
+            toolOutputs.push({
+              tool_call_id: toolCall.id,
+              output: JSON.stringify(result)
+            });
+          } catch (err) {
+            console.error(`Function ${functionName} failed:`, err);
+            toolOutputs.push({
+              tool_call_id: toolCall.id,
+              output: JSON.stringify({ 
+                success: false, 
+                error: err instanceof Error ? err.message : 'Unknown error' 
+              })
+            });
+          }
+        } else {
+          console.warn(`Unknown function: ${functionName}`);
+          toolOutputs.push({
+            tool_call_id: toolCall.id,
+            output: JSON.stringify({ 
+              success: false, 
+              error: `Unknown function: ${functionName}` 
+            })
+          });
+        }
+      }
+
+      // Add validation before scheduling
+      if (proposedSchedulingTime) {
+        const validationResult = await validateSchedulingDecision(
+          proposedSchedulingTime,
+          proposedParticipants,
+          timeContext,
+          req
+        );
+        
+        if (!validationResult.isValid) {
+          console.log('Scheduling validation failed:', validationResult.reason);
+          // Send the validation failure back to the AI for reconsideration
+          await openai.beta.threads.messages.create(thread.id, {
+            role: 'user',
+            content: `The proposed time ${proposedSchedulingTime} is not valid: ${validationResult.reason}. Please suggest a different time that works for all participants.`
+          });
+          
+          // Continue the conversation loop
+          continue;
         }
       }
 
@@ -347,6 +570,9 @@ async function extractTimeContext(message: string): Promise<TimeContext> {
       day: 'numeric'
     });
     
+    // Check if the message explicitly requests today
+    const isExplicitToday = /\b(today|tonight|this\s+evening|this\s+afternoon|this\s+morning)\b/i.test(message);
+    
     // Use OpenAI to extract the time context
     const completion = await openai.chat.completions.create({
       model: "gpt-4-turbo-preview",
@@ -358,7 +584,8 @@ async function extractTimeContext(message: string): Promise<TimeContext> {
 CRITICAL INFORMATION:
 - Today's date is ${formattedDate} (${currentDateISO})
 - You MUST use this exact current date as your reference point
-- All dates you generate MUST be in the future relative to today
+- All dates you generate MUST be in the future relative to now
+- If user explicitly requests today, allow scheduling for today
 - NEVER return dates from the past
 
 Return a JSON object with this exact structure:
@@ -368,46 +595,9 @@ Return a JSON object with this exact structure:
   "endDate": "ISO date string for the latest date to consider",
   "specificDays": [Array of day numbers, 0-6 where 0 is Sunday],
   "timeOfDay": "morning" | "afternoon" | "evening" | "all-day",
-  "description": "Human-readable description of the time context"
-}
-
-Examples of specific time phrases and how to handle them (ADJUST ALL DATES RELATIVE TO TODAY, ${formattedDate}):
-1. "late next week" -> 
-  - type: "relative"
-  - startDate: Next Thursday at 9am
-  - endDate: Next Friday at 5pm
-  - timeOfDay: depends on meeting type
-  - description: "Late next week (Thursday-Friday)"
-
-2. "early next week" -> 
-  - type: "relative" 
-  - startDate: Next Monday at 9am
-  - endDate: Next Tuesday at 5pm
-  - timeOfDay: depends on meeting type
-  - description: "Early next week (Monday-Tuesday)"
-
-3. "next month" ->
-  - type: "relative"
-  - startDate: First day of next month at 9am
-  - endDate: Last day of next month at 5pm
-  - timeOfDay: depends on meeting type
-  - description: "Sometime next month"
-
-4. "tomorrow afternoon" ->
-  - type: "specific"
-  - startDate: Tomorrow at 12pm
-  - endDate: Tomorrow at 5pm
-  - timeOfDay: "afternoon"
-  - description: "Tomorrow afternoon"
-
-5. No time specified -> 
-  - type: "default"
-  - startDate: Tomorrow at 9am
-  - endDate: 10 business days from now at 5pm
-  - timeOfDay: depends on meeting type
-  - description: "Default scheduling window (next two weeks)"
-
-DO NOT include explanations or extra text — only return the final JSON result.`
+  "description": "Human-readable description of the time context",
+  "isExplicitlyToday": boolean
+}`
         },
         {
           role: "user",
@@ -432,22 +622,35 @@ DO NOT include explanations or extra text — only return the final JSON result.
       const startDate = new Date(parsed.startDate);
       const endDate = new Date(parsed.endDate);
       
-      if (startDate < now) {
+      // Only adjust to tomorrow if it's not explicitly requesting today
+      if (startDate < now && !isExplicitToday) {
         console.warn('Extracted startDate is in the past, adjusting to tomorrow');
         // Fix to tomorrow
         const tomorrow = new Date(now);
         tomorrow.setDate(now.getDate() + 1);
         tomorrow.setHours(9, 0, 0, 0);
         parsed.startDate = tomorrow.toISOString();
+      } else if (isExplicitToday) {
+        // If explicitly requesting today, use current time + 15 minutes as start
+        const todayStart = new Date(now);
+        todayStart.setMinutes(todayStart.getMinutes() + 15);
+        parsed.startDate = todayStart.toISOString();
+        
+        // Set end time to end of today
+        const todayEnd = new Date(now);
+        todayEnd.setHours(22, 0, 0, 0);
+        parsed.endDate = todayEnd.toISOString();
       }
       
       if (endDate < now || endDate < startDate) {
-        console.warn('Extracted endDate is invalid, adjusting to startDate + 2 days');
-        // Fix to startDate + 2 days
-        const fixedEnd = new Date(parsed.startDate);
-        fixedEnd.setDate(fixedEnd.getDate() + 2);
-        fixedEnd.setHours(17, 0, 0, 0);
-        parsed.endDate = fixedEnd.toISOString();
+        if (!isExplicitToday) {
+          console.warn('Extracted endDate is invalid, adjusting to startDate + 2 days');
+          // Fix to startDate + 2 days
+          const fixedEnd = new Date(parsed.startDate);
+          fixedEnd.setDate(fixedEnd.getDate() + 2);
+          fixedEnd.setHours(17, 0, 0, 0);
+          parsed.endDate = fixedEnd.toISOString();
+        }
       }
       
       return parsed;
@@ -481,20 +684,18 @@ function getDefaultTimeContext(): TimeContext {
     startDate: startDate.toISOString(),
     endDate: endDate.toISOString(),
     timeOfDay: "all-day",
-    description: "Default scheduling window (next two weeks)"
+    description: "Default scheduling window (next two weeks)",
+    isExplicitlyToday: false
   };
 }
 
 // Helper function to get suggested times considering calendar availability
-async function getSuggestedTimes(req: NextApiRequest, message: string, participants: string[]) {
+async function getSuggestedTimes(req: NextApiRequest, message: string, participants: string[]): Promise<string[]> {
   try {
-    // Extract time context from the message
     const timeContext = await extractTimeContext(message);
-    
-    // Get user's timezone
     const userTimezone = (req.headers['x-timezone'] as string) || 'America/Los_Angeles';
     
-    // Extract specific meeting type clues from the message
+    // Extract meeting type clues from the message
     const meetingTypeClues = {
       happyHour: /happy\s*hour|drinks/i.test(message),
       coffee: /coffee|tea/i.test(message),
@@ -506,30 +707,27 @@ async function getSuggestedTimes(req: NextApiRequest, message: string, participa
     };
     
     // Set time preferences based on meeting type
-    let timePreference;
-    let suggestedDuration = 30; // Default 30 minutes
-    
     if (meetingTypeClues.happyHour) {
-      timePreference = 'happy hour'; // 4:00 PM - 6:30 PM
-      suggestedDuration = 60; // Happy hours are typically 1 hour
+      timePreference = 'happy hour';
+      suggestedDuration = 60;
     } else if (meetingTypeClues.coffee) {
-      timePreference = 'coffee'; // 8:00 AM - 11:00 AM
-      suggestedDuration = 30; // Coffee chats are typically 30 minutes
+      timePreference = 'coffee';
+      suggestedDuration = 30;
     } else if (meetingTypeClues.lunch) {
-      timePreference = 'lunch'; // 11:30 AM - 1:30 PM
-      suggestedDuration = 60; // Lunch is typically 1 hour
+      timePreference = 'lunch';
+      suggestedDuration = 60;
     } else if (meetingTypeClues.breakfast) {
-      timePreference = 'breakfast'; // 7:30 AM - 9:30 AM
-      suggestedDuration = 60; // Breakfast is typically 1 hour
+      timePreference = 'breakfast';
+      suggestedDuration = 60;
     } else if (meetingTypeClues.dinner) {
-      timePreference = 'dinner'; // 6:00 PM - 8:30 PM
-      suggestedDuration = 90; // Dinners are typically 1.5 hours
+      timePreference = 'dinner';
+      suggestedDuration = 90;
     } else if (meetingTypeClues.business) {
-      timePreference = 'business'; // 9:00 AM - 5:00 PM
-      suggestedDuration = 30; // Business meetings are often 30 minutes
+      timePreference = 'business';
+      suggestedDuration = 30;
     } else if (meetingTypeClues.social) {
-      timePreference = 'social'; // More flexible, but usually evenings or weekends
-      suggestedDuration = 120; // Social events are often 2 hours
+      timePreference = 'social';
+      suggestedDuration = 120;
     } else if (timeContext.timeOfDay) {
       timePreference = timeContext.timeOfDay;
     }
@@ -555,14 +753,12 @@ async function getSuggestedTimes(req: NextApiRequest, message: string, participa
     
     console.log(`Registered participants: ${registeredEmails.length}, Unregistered: ${unregisteredEmails.length}`);
     
-    // First attempt: Try to get availability for the requested time window with specific time preference
     let availability = await getAvailability(req, participants, {
       startDate: timeContext?.startDate || new Date().toISOString(),
       endDate: timeContext?.endDate || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
     }, timePreference, suggestedDuration);
     
-    // Check if the specific meeting type didn't work, but we have times with generic timeOfDay preference
-    if ((!availability.availableTimes || availability.availableTimes.length === 0) && timePreference && timeContext.timeOfDay) {
+    if (!availability.availableTimes.length && timePreference && timeContext.timeOfDay) {
       console.log(`No times available with ${timePreference} preference, trying with ${timeContext.timeOfDay}...`);
       
       availability = await getAvailability(req, participants, {
@@ -571,8 +767,7 @@ async function getSuggestedTimes(req: NextApiRequest, message: string, participa
       }, timeContext.timeOfDay, suggestedDuration);
     }
     
-    // If still no times available with preferences, try with any time in the window
-    if (!availability.availableTimes || availability.availableTimes.length === 0) {
+    if (!availability.availableTimes.length) {
       console.log("No times available with preferences, trying any time in window...");
       
       availability = await getAvailability(req, participants, {
@@ -581,62 +776,108 @@ async function getSuggestedTimes(req: NextApiRequest, message: string, participa
       }, "all-day", suggestedDuration);
     }
     
-    // If still no times available, try extending the window by a week
-    if (!availability.availableTimes || availability.availableTimes.length === 0) {
-      console.log("No times available in requested window, extending search by a week...");
-      
-      // Create an extended window
-      const extendedEndDate = new Date(timeContext?.endDate || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000));
-      extendedEndDate.setDate(extendedEndDate.getDate() + 7);
-      
-      availability = await getAvailability(req, participants, {
-        startDate: timeContext?.startDate || new Date().toISOString(),
-        endDate: extendedEndDate.toISOString()
-      }, timePreference || timeContext.timeOfDay || "all-day", suggestedDuration);
-    }
-    
-    // If still no times available with normal hours, try with extended hours
-    if (!availability.availableTimes || availability.availableTimes.length === 0) {
-      console.log("No times available with normal working hours, trying extended hours...");
-      
-      // Try with extended hours (e.g., including early morning and evening)
-      availability = await getAvailability(req, participants, {
-        startDate: timeContext?.startDate || new Date().toISOString(),
-        endDate: timeContext?.endDate || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
-      }, "extended", suggestedDuration);
-    }
-    
-    // Final check with both extended time range and extended hours
-    if (!availability.availableTimes || availability.availableTimes.length === 0) {
-      console.log("Still no times available, trying extended window with extended hours...");
-      
-      const extendedEndDate = new Date(timeContext?.endDate || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000));
-      extendedEndDate.setDate(extendedEndDate.getDate() + 14); // Two more weeks
-      
-      availability = await getAvailability(req, participants, {
-        startDate: timeContext?.startDate || new Date().toISOString(),
-        endDate: extendedEndDate.toISOString()
-      }, "extended", suggestedDuration);
-    }
-    
-    // Log the final result
-    if (availability.availableTimes && availability.availableTimes.length > 0) {
+    if (availability.availableTimes.length > 0) {
       console.log(`Found ${availability.availableTimes.length} suitable time slots after optimization`);
       
-      // If we have unregistered participants, add a clear warning message
       if (availability.hasUnregisteredParticipants) {
-        console.warn(`NOTE: ${availability.unregisteredParticipants.length} participants don't have calendar access.`);
-        console.warn(`Unregistered participants: ${availability.unregisteredParticipants.join(', ')}`);
+        console.warn(`NOTE: ${availability.unregisteredParticipants?.length} participants don't have calendar access.`);
+        console.warn(`Unregistered participants: ${availability.unregisteredParticipants?.join(', ')}`);
         console.warn('Suggested times are based on standard availability patterns and may not reflect their actual schedules.');
       }
     } else {
       console.log("No suitable time slots found even after trying all fallback strategies");
     }
     
-    // Return available times, or empty array if none found
-    return availability.availableTimes || [];
+    // Convert Date objects to ISO strings
+    return availability.availableTimes.map(slot => slot.start.toISOString());
   } catch (error) {
     console.error("Error getting suggested times:", error);
     throw error;
+  }
+}
+
+scheduleMeeting: async (
+  args: {
+    title: string;
+    participants: string[];
+    startTime: string;
+    endTime: string;
+    description?: string;
+    location?: string;
+    isVirtual: boolean;
+    meetingType?: string;
+  },
+  req: NextApiRequest,
+  res: NextApiResponse
+) => {
+  console.log('\n=== SCHEDULE MEETING CALLED ===');
+  console.log('Args:', JSON.stringify(args, null, 2));
+
+  const session = await getServerSession(req, res, authOptions);
+  if (!session?.user?.email) throw new Error('Not authenticated');
+
+  // Additional validation of start and end times
+  const startTime = new Date(args.startTime);
+  const endTime = new Date(args.endTime);
+  const now = new Date();
+  
+  // Validate time is in the future
+  if (startTime <= now) {
+    throw new Error('Meeting time must be in the future');
+  }
+  
+  // CRITICAL FIX: Do a final verification against calendar availability
+  // This ensures we never create meetings at conflicting times or outside working hours
+  console.log('Performing final availability check before scheduling...');
+  
+  try {
+    // Create a narrow window just around the proposed time
+    const verifyWindow = {
+      startDate: new Date(startTime.getTime() - 15 * 60 * 1000).toISOString(), // 15 minutes before
+      endDate: new Date(endTime.getTime() + 15 * 60 * 1000).toISOString()      // 15 minutes after
+    };
+    
+    // Check availability explicitly for this specific time
+    const availabilityCheck = await getAvailability(
+      req,
+      args.participants,
+      verifyWindow,
+      'extended', // Use extended to check just conflict, not preference
+      Math.round((endTime.getTime() - startTime.getTime()) / (60 * 1000)) // Duration in minutes
+    );
+    
+    // If no available times overlap with our exact proposed time, it must be conflicting
+    if (!availabilityCheck.availableTimes || availabilityCheck.availableTimes.length === 0) {
+      console.error('🚨 SCHEDULING CONFLICT DETECTED! The proposed time conflicts with calendar blocks or working hours');
+      throw new Error('The proposed time conflicts with calendar blocks or working hours. Please choose a different time.');
+    }
+    
+    // Verify the proposed time exactly matches one of the available times
+    const exactMatch = availabilityCheck.availableTimes.some((slot: TimeSlot) => {
+      const slotStart = new Date(slot.start);
+      const slotEnd = new Date(slot.end);
+      
+      // Allow small 1-minute tolerance for timestamp comparison
+      const startDiff = Math.abs(slotStart.getTime() - startTime.getTime()) / (60 * 1000);
+      const endDiff = Math.abs(slotEnd.getTime() - endTime.getTime()) / (60 * 1000);
+      
+      return startDiff <= 1 && endDiff <= 1;
+    });
+    
+    if (!exactMatch) {
+      console.error('🚨 SCHEDULING VALIDATION FAILED! Proposed time doesn\'t match any available slot');
+      throw new Error('The proposed time doesn\'t match any available slot in the calendar.');
+    }
+    
+    console.log('✅ Final availability check passed - time is available and within preferences');
+  } catch (error) {
+    console.error('Failed to verify availability:', error);
+    throw new Error(`Cannot schedule meeting: ${error instanceof Error ? error.message : 'Unknown availability error'}`);
+  }
+  
+  // Validate that meeting is not too late or too early (between 7am and 10pm)
+  const hour = startTime.getHours();
+  if (hour < 7 || hour >= 22) {
+    throw new Error('Meeting time must be between 7:00 AM and 10:00 PM');
   }
 }

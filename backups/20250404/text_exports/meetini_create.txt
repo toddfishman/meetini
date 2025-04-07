@@ -1,0 +1,354 @@
+import { NextApiRequest, NextApiResponse } from 'next';
+import { getServerSession, Session } from 'next-auth';
+import authOptions from '../auth/[...nextauth]';
+import { prisma } from '@/lib/prisma';
+import { CalendarService } from '../../../lib/calendarService';
+import { detectMeetingPurpose } from '@/lib/nlp';
+import { EmailService } from '@/lib/emailService';
+import { Resend } from 'resend';
+import { google } from 'googleapis';
+import { getToken } from 'next-auth/jwt';
+
+interface MeetiniParticipant {
+  email: string;
+  name?: string;
+  phoneNumber?: string;
+  notifyByEmail?: boolean;
+  notifyBySms?: boolean;
+}
+
+interface MeetiniInvite {
+  title?: string;
+  description?: string;
+  location?: string;
+  type: string;
+  participants: MeetiniParticipant[];
+  suggestedTimes?: string[];
+  createdBy: string;
+}
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  try {
+    const session = await getServerSession(req, res, authOptions) as Session;
+    console.log('Create Meetini Session:', {
+      hasSession: !!session,
+      hasUser: !!session?.user,
+      hasAccessToken: !!session?.accessToken,
+      user: session?.user,
+      token: session?.accessToken?.slice(0, 10) + '...',
+    });
+
+    // Check for authorization header as backup
+    const authHeader = req.headers.authorization;
+    if (!session?.accessToken && authHeader?.startsWith('Bearer ')) {
+      const token = authHeader.substring(7);
+      console.log('Using token from Authorization header');
+      session.accessToken = token;
+    }
+
+    if (!session?.accessToken) {
+      console.error('No access token available in session or header');
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+
+    if (!session?.user) {
+      console.error('No user found in session');
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+
+    console.log('Session found:', {
+      user: session.user,
+      hasAccessToken: !!session.accessToken,
+      hasRefreshToken: !!session.refreshToken
+    });
+
+    const { invite } = req.body as { invite: MeetiniInvite };
+    
+    if (!invite?.type || !invite.participants || invite.participants.length === 0) {
+      console.error('Invalid invite data:', invite);
+      return res.status(400).json({ error: 'Invalid invite data' });
+    }
+
+    console.log('Creating invite with data:', invite);
+
+    // Create calendar event
+    const calendarService = new CalendarService(session);
+
+    // Format title based on meeting type and participants
+    const meetingPurpose = detectMeetingPurpose(invite.type);
+    const meetingType = meetingPurpose?.type || 'Meeting';
+    const participantNames = invite.participants
+      .map((p: MeetiniParticipant) => p.name || p.email.split('@')[0])
+      .join(' / ');
+    
+    const eventTitle = `${meetingType} with ${participantNames}`;
+    
+    // REQUIRE suggested times from the Assistant
+    if (!invite.suggestedTimes?.length) {
+      return res.status(400).json({ 
+        error: 'No suggested times provided. Please use the AI Assistant to find optimal meeting times.'
+      });
+    }
+
+    // In the existing code, after checking invite.suggestedTimes?.length 
+    // Check which participants are registered Meetini users
+    const registeredUsers = await prisma.user.findMany({
+      where: {
+        email: {
+          in: invite.participants.map(p => p.email)
+        }
+      },
+      select: { email: true }
+    });
+
+    const registeredEmails = new Set(registeredUsers.map(u => u.email));
+
+    // Check if all participants are registered users with calendar access
+    const allParticipantsRegistered = invite.participants.every(p => 
+      registeredEmails.has(p.email)
+    );
+
+    // If no conflicts, create the calendar event
+    let event: any = null;
+    let calendarEventCreated = false;
+
+    if (allParticipantsRegistered) {
+      // If all participants are registered, proceed with calendar event creation
+      try {
+        event = await calendarService.createEvent({
+          summary: eventTitle,
+          description: invite.description || `Scheduled via Meetini\n\nOriginal prompt: ${invite.type}`,
+          attendees: invite.participants.map((p: MeetiniParticipant) => ({ email: p.email })),
+          startTime: invite.suggestedTimes[0],
+          duration: 30,
+          virtual: true
+        });
+
+        if (!event.id || !event.start?.dateTime) {
+          throw new Error('Failed to create calendar event with valid start time');
+        }
+        calendarEventCreated = true;
+      } catch (error) {
+        console.error('Failed to create calendar event:', error);
+        throw error;
+      }
+    } else {
+      console.log('Not all participants are registered. Skipping calendar event creation until confirmation.');
+      // We'll create a "tentative" meetini without a calendar event
+    }
+
+    // Save invite to database with proper proposedTimes
+    const startDateTime = new Date(invite.suggestedTimes[0]);
+
+    const dbInvite = await prisma.invitation.create({
+      data: {
+        title: eventTitle,
+        type: invite.type,
+        status: allParticipantsRegistered ? 'confirmed' : 'pending_confirmation',
+        createdBy: session.user.email,
+        calendarEventId: calendarEventCreated ? event.id : null,
+        proposedTimes: invite.suggestedTimes ? invite.suggestedTimes.map(time => new Date(time)) : [startDateTime], // Ensure we always have at least one time
+        participants: {
+          create: invite.participants.map((p: MeetiniParticipant) => ({
+            email: p.email,
+            name: p.name,
+            status: registeredEmails.has(p.email) ? 'confirmed' : 'pending',
+            notifyByEmail: p.notifyByEmail ?? true,
+            notifyBySms: p.notifyBySms ?? false,
+            phoneNumber: p.phoneNumber
+          }))
+        }
+      },
+      include: {
+        participants: true
+      }
+    });
+
+    // Prepare meeting details for email
+    const meetingDetails: any = {
+      title: eventTitle,
+      type: meetingType,
+      dateTime: calendarEventCreated && event?.start?.dateTime 
+        ? new Date(event.start.dateTime) 
+        : startDateTime,
+      duration: '30 minutes',
+      location: invite.location || 'Virtual',
+      description: invite.description,
+      meetLink: calendarEventCreated && event?.conferenceData?.entryPoints?.[0]?.uri 
+        ? event.conferenceData.entryPoints[0].uri 
+        : undefined,
+      calendarLink: calendarEventCreated && event?.htmlLink 
+        ? event.htmlLink 
+        : '#',
+      originalPrompt: invite.type,
+      creator: {
+        name: session.user.name || session.user.email.split('@')[0],
+        email: session.user.email
+      },
+      participants: invite.participants.map(p => p.email),
+      suggestedTimes: invite.suggestedTimes,
+      pendingConfirmation: !allParticipantsRegistered
+    };
+
+    // Send participant notifications with calendar and Meet links
+    const emailErrors = [];
+    const emailService = new EmailService(); // Create once for all emails
+
+    // First send creator confirmation
+    try {
+      await emailService.sendMeetingCreatedConfirmation({
+        ...meetingDetails,
+        pendingConfirmation: !allParticipantsRegistered,
+        unregisteredParticipants: invite.participants
+          .filter(p => !registeredEmails.has(p.email))
+          .map(p => p.email)
+      });
+    } catch (emailError) {
+      console.error('Failed to send creator confirmation:', emailError);
+      emailErrors.push({ email: session.user.email, error: emailError instanceof Error ? emailError.message : 'Unknown error' });
+    }
+
+    // Then send participant notifications
+    for (const participant of invite.participants) {
+      if (participant.email === session.user.email) continue;
+
+      const isRegistered = registeredEmails.has(participant.email);
+      const signupLink = `https://meetini.ai/signup?email=${encodeURIComponent(participant.email)}&invite=${dbInvite.id}`;
+      const confirmationLink = `https://meetini.ai/confirm-time?email=${encodeURIComponent(participant.email)}&invite=${dbInvite.id}`;
+
+      try {
+        const customHtml = !isRegistered ? `
+          <div style="margin-top: 20px; padding: 20px; background: #f0f9ff; border-radius: 8px;">
+            <h3 style="color: #0369a1; margin: 0 0 10px 0;">About Meetini</h3>
+            <p style="margin: 0 0 15px 0;">
+              Meetini is an AI-powered scheduling assistant that makes finding the perfect meeting time easy.
+              No more back-and-forth emails or calendar conflicts!
+            </p>
+            
+            <h3 style="color: #0369a1; margin: 20px 0 10px 0;">Help Choose the Best Meeting Time</h3>
+            <p style="margin: 0 0 15px 0;">
+              ${session.user.name || session.user.email.split('@')[0]} would like to schedule: <strong>${invite.title}</strong>
+            </p>
+            
+            <div style="background-color: #e0f2fe; border-radius: 6px; padding: 15px; margin-bottom: 20px;">
+              <h4 style="margin-top: 0; color: #0369a1;">Available Meeting Times:</h4>
+              <ul style="padding-left: 20px;">
+                ${invite.suggestedTimes?.map((time, index) => `
+                  <li style="margin-bottom: 8px;">
+                    <strong>${new Date(time).toLocaleString(undefined, {
+                      weekday: 'long',
+                      month: 'short',
+                      day: 'numeric',
+                      hour: 'numeric',
+                      minute: '2-digit',
+                      hour12: true
+                    })}</strong>
+                  </li>
+                `).join('') || `<li>Time to be determined</li>`}
+              </ul>
+            </div>
+            
+            <p style="margin: 0 0 15px 0;">
+              Does one of these times work for you?
+            </p>
+            <div style="display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap;">
+              <a href="${confirmationLink}&response=yes" 
+                style="background: #0ea5e9; color: white; padding: 10px 20px; 
+                       text-decoration: none; border-radius: 4px; display: inline-block; margin-bottom: 10px;">
+                Yes, I can make it
+              </a>
+              <a href="${confirmationLink}&response=no" 
+                style="background: #f97316; color: white; padding: 10px 20px; 
+                       text-decoration: none; border-radius: 4px; display: inline-block; margin-bottom: 10px;">
+                No, suggest another time
+              </a>
+            </div>
+            
+            <hr style="border: 0; height: 1px; background-color: #bae6fd; margin: 20px 0;" />
+            
+            <p style="margin: 0 0 15px 0;">
+              Want more control over your scheduling?
+            </p>
+            <a href="${signupLink}" 
+               style="background: #0369a1; color: white; padding: 10px 20px; 
+                      text-decoration: none; border-radius: 4px; display: inline-block;">
+              Sign up for Meetini
+            </a>
+          </div>
+        ` : undefined;
+
+        if (isRegistered) {
+          // Registered users get the standard confirmation
+          await emailService.sendMeetingConfirmation({
+            ...meetingDetails,
+            to: participant.email
+          });
+        } else {
+          // Unregistered users get a special email with time selection options
+          await emailService.sendUnregisteredParticipantInvite({
+            ...meetingDetails,
+            to: participant.email,
+            additionalHtml: customHtml,
+            suggestedTimes: invite.suggestedTimes,
+            inviteId: dbInvite.id
+          });
+        }
+      } catch (emailError) {
+        console.error(`Failed to send email to ${participant.email}:`, emailError);
+        emailErrors.push({ email: participant.email, error: emailError instanceof Error ? emailError.message : 'Unknown error' });
+      }
+    }
+
+    // Return success with registration stats
+    return res.status(200).json({
+      success: true,
+      inviteId: dbInvite.id,
+      registeredParticipants: registeredEmails.size,
+      unregisteredParticipants: invite.participants.length - registeredEmails.size,
+      calendarEventCreated,
+      pendingConfirmation: !allParticipantsRegistered,
+      emailErrors: emailErrors.length > 0 ? emailErrors : undefined
+    });
+
+  } catch (error) {
+    console.error('Failed to create meeting:', error);
+    
+    // Provide more meaningful error messages based on error type
+    if (error instanceof Error) {
+      // Keep the existing detailed error message
+      if (error.message.includes('Scheduling conflict')) {
+        // This should not be reached due to our earlier response handling, but just in case
+        return res.status(409).json({ 
+          error: error.message,
+          suggestion: "You may want to cancel the existing invitation or schedule for a different time."
+        });
+      } else if (error.message.includes('calendar')) {
+        return res.status(500).json({ 
+          error: "There was an issue accessing your calendar.", 
+          details: error.message,
+          suggestion: "Please check your calendar permissions and try again."
+        });
+      } else if (error.message.includes('No suggested times')) {
+        return res.status(400).json({ 
+          error: "No suitable time slots were found.", 
+          details: error.message,
+          suggestion: "Try selecting a different time range or fewer participants."
+        });
+      }
+      
+      return res.status(500).json({ 
+        error: error.message,
+        suggestion: "Please try again or contact support if the issue persists."
+      });
+    }
+    
+    return res.status(500).json({ 
+      error: 'Failed to create meeting',
+      suggestion: "An unexpected error occurred. Please try again later."
+    });
+  }
+}

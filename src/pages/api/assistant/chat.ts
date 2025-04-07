@@ -6,6 +6,7 @@ import { createCalendarEvent } from '@/lib/calendar';
 import { searchEmailContacts } from '@/lib/google';
 import { prisma } from '@/lib/prisma';
 import { getAvailability } from '@/lib/calendar/calendarAvailability';
+import { getToken } from 'next-auth/jwt';
 
 export const availableFunctions = {
   findParticipants: async (
@@ -185,6 +186,25 @@ export const availableFunctions = {
 
       console.log('Available times:', result);
       
+      // CRITICAL FIX: Verify that we actually have available times before proceeding
+      // This ensures we never return empty slots that would ignore calendar blocks
+      if (!result.availableTimes || result.availableTimes.length === 0) {
+        console.error('🚨 WARNING: No available times found that respect calendar blocks and working hours!');
+        return {
+          success: false,
+          error: 'No available times found that respect calendar blocks and working hours. Please try a different time window or check calendar settings.',
+          warnings: result.warnings,
+          participantsWithoutAccess: result.participantsWithoutAccess,
+          suggestedAction: 'Try a broader time window or different day'
+        };
+      }
+      
+      // Debug log the first few available times to verify they respect preferences
+      console.log('Verified available times (respecting blocks and preferences):');
+      result.availableTimes.slice(0, 3).forEach((time: any, i: number) => {
+        console.log(`  ${i+1}. ${new Date(time.start).toLocaleString()} to ${new Date(time.end).toLocaleString()}`);
+      });
+      
       // Enrich the response with additional context
       return {
         success: true,
@@ -231,6 +251,107 @@ export const availableFunctions = {
     // Validate time is in the future
     if (startTime <= now) {
       throw new Error('Meeting time must be in the future');
+    }
+    
+    // CRITICAL FIX: Do a triple verification against calendar availability and user preferences
+    console.log('Performing comprehensive availability checks before scheduling...');
+    
+    try {
+      // 1. Verify against user's working hours preferences - especially half-hour start times
+      const token = await getToken({ req });
+      if (token?.email) {
+        const userEmail = token.email as string;
+        
+        // Get the user's specific calendar preferences, checking BOTH tables
+        const calendarPrefs = await prisma.calendarPreferences.findFirst({
+          where: {
+            user: {
+              email: userEmail
+            }
+          }
+        });
+        
+        const userPrefs = await prisma.userPreferences.findFirst({
+          where: {
+            user: {
+              email: userEmail
+            }
+          }
+        });
+        
+        // Extract working hours, with UserPreferences taking precedence
+        let workingHours: { start?: string; end?: string } = {};
+        
+        if (userPrefs?.workingHours) {
+          console.log('Found working hours in UserPreferences:', userPrefs.workingHours);
+          workingHours = userPrefs.workingHours as { start?: string; end?: string };
+        } else if (calendarPrefs?.workingHours) {
+          console.log('Found working hours in CalendarPreferences:', calendarPrefs.workingHours);
+          workingHours = calendarPrefs.workingHours as { start?: string; end?: string };
+        }
+        
+        // If working hours start is defined, verify the meeting doesn't start before that
+        if (workingHours.start) {
+          console.log(`Verifying meeting time against user's preferred start time: ${workingHours.start}`);
+          
+          // Parse the preferred start time with precision for half-hours
+          const [prefHours, prefMinutes] = workingHours.start.split(':').map(Number);
+          
+          // Create a Date object representing the user's preferred start time on the same day
+          const preferredStartTime = new Date(startTime);
+          preferredStartTime.setHours(prefHours, prefMinutes, 0, 0);
+          
+          // Compare with the proposed meeting start time
+          if (startTime < preferredStartTime) {
+            console.error(`⚠️ SCHEDULING VIOLATION: Meeting time ${startTime.toISOString()} is earlier than user's preferred start time ${preferredStartTime.toISOString()}`);
+            throw new Error(`Cannot schedule before your working hours start time (${workingHours.start}). Please choose a later time.`);
+          }
+        }
+      }
+      
+      // 2. Create a narrow window just around the proposed time for targeted availability check
+      const verifyWindow = {
+        startDate: new Date(startTime.getTime() - 5 * 60 * 1000).toISOString(), // 5 minutes before
+        endDate: new Date(endTime.getTime() + 5 * 60 * 1000).toISOString()      // 5 minutes after
+      };
+      
+      // 3. Do a strict availability check against calendar events
+      const availabilityCheck = await getAvailability(
+        req,
+        args.participants,
+        verifyWindow,
+        'exact', // Use 'exact' mode to check only this specific time window
+        Math.round((endTime.getTime() - startTime.getTime()) / (60 * 1000)) // Duration in minutes
+      );
+      
+      // If no available times overlap with our exact proposed time, it must be conflicting
+      if (!availabilityCheck.availableTimes || availabilityCheck.availableTimes.length === 0) {
+        console.error('🚨 SCHEDULING CONFLICT DETECTED! The proposed time conflicts with calendar blocks or working hours');
+        throw new Error('The proposed time conflicts with calendar blocks or working hours. Please choose a different time.');
+      }
+      
+      // Verify the proposed time exactly matches one of the available times
+      const exactTimeAvailable = availabilityCheck.availableTimes.some((timeStr: string) => {
+        const slot = JSON.parse(timeStr);
+        const slotStart = new Date(slot.start);
+        const slotEnd = new Date(slot.end);
+        
+        // Allow small 1-minute tolerance for timestamp comparison
+        const startDiff = Math.abs(slotStart.getTime() - startTime.getTime()) / (60 * 1000);
+        const endDiff = Math.abs(slotEnd.getTime() - endTime.getTime()) / (60 * 1000);
+        
+        return startDiff <= 1 && endDiff <= 1;
+      });
+      
+      if (!exactTimeAvailable) {
+        console.error('🚨 SCHEDULING VALIDATION FAILED! Proposed time doesn\'t match any available slot');
+        throw new Error('The proposed time doesn\'t match any available slot in the calendar.');
+      }
+      
+      console.log('✅ Final availability check passed - time is available and within preferences');
+    } catch (error) {
+      console.error('Failed to verify availability:', error);
+      throw new Error(`Cannot schedule meeting: ${error instanceof Error ? error.message : 'Unknown availability error'}`);
     }
     
     // Validate that meeting is not too late or too early (between 7am and 10pm)

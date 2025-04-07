@@ -490,13 +490,7 @@ export default function Dashboard() {
 
       const data = await response.json();
       if (!response.ok) {
-        if (data.error && typeof data.error === 'string') {
-          throw new Error(data.error);
-        } else if (data.error && typeof data.error === 'object') {
-          throw new Error(data.error.details || JSON.stringify(data.error) || 'An unknown error occurred');
-        } else {
-          throw new Error(`Failed to create meeting (${response.status})`);
-        }
+        throw new Error(data.error || 'Failed to create invitation');
       }
 
       // Reset state and show success message
@@ -991,20 +985,10 @@ export default function Dashboard() {
       // Show the Assistant's response
       if (aiData.messages?.length > 0) {
         const lastMessage = aiData.messages[0]; // OpenAI returns newest first
-        setMeetingSummary(prev => {
-          if (!prev) return {
-            message: lastMessage.content.map((c: any) => c.text.value).join('\n'),
-            contacts: [],
-            query: "",
-            type: "",
-            confidence: 0,
-            suggestedTimes: []
-          };
-          return {
-            ...prev,
-            message: lastMessage.content.map((c: any) => c.text.value).join('\n')
-          };
-        });
+        setMeetingSummary(prev => ({
+          ...prev,
+          message: lastMessage.content.map((c: any) => c.text.value).join('\n')
+        }));
       }
 
       // Make the calendar API request with the suggested time
@@ -1031,13 +1015,7 @@ export default function Dashboard() {
 
       const data = await response.json();
       if (!response.ok) {
-        if (data.error && typeof data.error === 'string') {
-          throw new Error(data.error);
-        } else if (data.error && typeof data.error === 'object') {
-          throw new Error(data.error.details || JSON.stringify(data.error) || 'An unknown error occurred');
-        } else {
-          throw new Error(`Failed to create meeting (${response.status})`);
-        }
+        throw new Error(data.error || `Failed to create meeting (${response.status})`);
       }
 
       // Show success message
@@ -1057,7 +1035,6 @@ export default function Dashboard() {
       setSelectedContacts(new Set());
       setMeetingSummary(null);
       setMeetingDetails({
-        title: '',
         startDate: new Date().toISOString().split('T')[0],
         startTime: '09:00',
         duration: 30,
@@ -1132,13 +1109,7 @@ export default function Dashboard() {
           }
 
           if (!response.ok) {
-            if (data.error && typeof data.error === 'string') {
-              throw new Error(data.error);
-            } else if (data.error && typeof data.error === 'object') {
-              throw new Error(data.error.details || JSON.stringify(data.error) || `Failed to ${action} invitation`);
-            } else {
-              throw new Error(`Failed to ${action} invitation`);
-            }
+            throw new Error(data.error || `Failed to ${action} invitation`);
           }
 
           // If accepting, create calendar event
@@ -1158,13 +1129,7 @@ export default function Dashboard() {
             }
 
             if (!calendarResponse.ok) {
-              if (calendarData?.error && typeof calendarData.error === 'string') {
-                throw new Error(calendarData.error);
-              } else if (calendarData?.error && typeof calendarData.error === 'object') {
-                throw new Error(calendarData.error.details || JSON.stringify(calendarData.error) || 'Failed to create calendar event');
-              } else {
-                throw new Error('Failed to create calendar event');
-              }
+              throw new Error(calendarData?.error || 'Failed to create calendar event');
             }
           }
 

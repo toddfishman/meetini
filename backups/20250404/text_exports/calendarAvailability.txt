@@ -16,7 +16,7 @@ interface GoogleCalendarBusySlot {
   end?: string | null;
 }
 
-export interface TimeSlot {
+interface TimeSlot {
   start: Date;
   end: Date;
 }
@@ -26,31 +26,24 @@ interface UserWorkingHoursPreference {
   end?: string;
 }
 
-export interface AvailabilityResponse {
-  success: boolean;
-  availableTimes: TimeSlot[];
-  hasUnregisteredParticipants?: boolean;
-  unregisteredParticipants?: string[];
-  warnings?: string[];
-  timezone?: string;
-  userPreferences?: any;
-}
-
 export async function getAvailability(
   req: NextApiRequest,
   participants: string[],
   timeConstraints?: { startDate?: string; endDate?: string },
   timePreference?: 'morning' | 'afternoon' | 'evening' | string,
   duration: number = 30
-): Promise<AvailabilityResponse> {
+) {
   console.log('\n==== CALENDAR AVAILABILITY CHECK ====');
 
   // Get user's timezone from request or browser
+  // Default to America/Los_Angeles if not specified to avoid UTC
   const userTimezone = (req.headers['x-timezone'] as string) || 'America/Los_Angeles';
+  console.log(`Using timezone: ${userTimezone}`);
   
   // Get current time in user's timezone and log it for debugging
   const now = new Date();
   const userNow = utcToZonedTime(now, userTimezone);
+  console.log(`Current time in user timezone: ${format(userNow, 'yyyy-MM-dd HH:mm:ss')}`);
   
   // Round up to the next 30-minute mark
   const minutes = userNow.getMinutes();
@@ -59,14 +52,16 @@ export async function getAvailability(
   
   // If timeConstraints are provided, use those dates
   let searchStart = startTime;
-  let searchEnd = addDays(startTime, 14);
+  let searchEnd = addDays(startTime, 14); // Extend default to 2 weeks for more options
   
   if (timeConstraints?.startDate) {
     searchStart = parseISO(timeConstraints.startDate);
+    // Convert to user timezone to ensure proper local time
     searchStart = utcToZonedTime(searchStart, userTimezone);
   }
   if (timeConstraints?.endDate) {
     searchEnd = parseISO(timeConstraints.endDate);
+    // Convert to user timezone to ensure proper local time
     searchEnd = utcToZonedTime(searchEnd, userTimezone);
   }
   
@@ -93,61 +88,8 @@ export async function getAvailability(
   let workStart = 9; // Default to 9 AM
   let workEnd = 17;  // Default to 5 PM
   
-  // Also get organizer's account
-  const token = await getToken({ req });
-  let organizerHasAccess = false;
-  let organizerEmail = '';
-  
-  if (token?.email) {
-    organizerEmail = token.email as string;
-    
-    // Remove organizer from the "without access" list if they're the caller
-    const organizerIndex = validParticipants.indexOf(organizerEmail);
-    if (organizerIndex !== -1) {
-      organizerHasAccess = true;
-      validParticipants.splice(organizerIndex, 1);
-    }
-  }
-  
-  console.log(`Participants without calendar access: ${validParticipants.join(', ')}`);
-  
-  // IMPORTANT: If we're scheduling with unregistered users, we need to be more
-  // conservative with our time proposals 
-  const hasUnregisteredParticipants = validParticipants.length > 0;
-  
-  // Apply working hours from the user's preferences FIRST
-  // This ensures user-specified preferences always override the defaults
-  const userWorkingHours = token?.email ? applyWorkingHoursPreferences(userPreferences, token.email as string) : null;
-  if (userWorkingHours && userWorkingHours.start && userWorkingHours.end) {
-    console.log(`Applying user's specific working hours: ${userWorkingHours.start} to ${userWorkingHours.end}`);
-    // Parse hours and minutes with proper precision for half-hour preferences
-    const startParts = userWorkingHours.start.split(':').map(Number);
-    const endParts = userWorkingHours.end.split(':').map(Number);
-    
-    // Convert to decimal hours for compatibility with existing code
-    workStart = startParts[0] + (startParts[1] || 0) / 60;
-    workEnd = endParts[0] + (endParts[1] || 0) / 60;
-    
-    console.log(`Converted to decimal hours: ${workStart} to ${workEnd}`);
-  }
-  
-  // If we have unregistered participants, adjust time suggestions based on common availability
-  if (hasUnregisteredParticipants) {
-    console.log(`Adjusting time suggestions for ${validParticipants.length} unregistered participants`);
-    
-    // Make more reasonable time assumptions for unregistered users:
-    // - Prefer mid-day hours (10am-3pm) for unknown availability
-    // - Prefer weekdays over weekends
-    // - Avoid early morning and late evening 
-    if (timePreference !== 'extended') {
-      if (workStart < 10) workStart = 10;
-      if (workEnd > 16) workEnd = 16;
-      console.log(`Adjusted working hours for unregistered participants: ${workStart}:00 to ${workEnd}:00`);
-    }
-  }
-  
-  // Map string-based time preference to hours, but don't override user preferences
-  if (typeof timePreference === 'string' && !userWorkingHours) {
+  // Map string-based time preference to hours
+  if (typeof timePreference === 'string') {
     if (timePreference === 'morning' || timePreference.includes('breakfast') || timePreference.includes('coffee')) {
       workStart = 8;
       workEnd = 12;
@@ -200,6 +142,43 @@ export async function getAvailability(
     }
   }
 
+  // Also get organizer's account
+  const token = await getToken({ req });
+  let organizerHasAccess = false;
+  let organizerEmail = '';
+  
+  if (token?.email) {
+    organizerEmail = token.email as string;
+    
+    // Remove organizer from the "without access" list if they're the caller
+    const organizerIndex = participantsWithoutAccess.indexOf(organizerEmail);
+    if (organizerIndex !== -1) {
+      organizerHasAccess = true;
+      participantsWithoutAccess.splice(organizerIndex, 1);
+    }
+  }
+  
+  console.log(`Participants without calendar access: ${participantsWithoutAccess.join(', ')}`);
+  
+  // IMPORTANT: If we're scheduling with unregistered users, we need to be more
+  // conservative with our time proposals 
+  const hasUnregisteredParticipants = participantsWithoutAccess.length > 0;
+  
+  // If we have unregistered participants, adjust time suggestions based on common availability
+  if (hasUnregisteredParticipants) {
+    console.log(`Adjusting time suggestions for ${participantsWithoutAccess.length} unregistered participants`);
+    
+    // Make more reasonable time assumptions for unregistered users:
+    // - Prefer mid-day hours (10am-3pm) for unknown availability
+    // - Prefer weekdays over weekends
+    // - Avoid early morning and late evening 
+    if (timePreference !== 'extended') {
+      if (workStart < 10) workStart = 10;
+      if (workEnd > 16) workEnd = 16;
+      console.log(`Adjusted working hours for unregistered participants: ${workStart}:00 to ${workEnd}:00`);
+    }
+  }
+
   // Get busy times for each participant with calendar access
   for (const account of participantAccounts) {
     // Determine the participant's timezone
@@ -225,17 +204,7 @@ export async function getAvailability(
       const searchEndUTC = zonedTimeToUtc(searchEnd, userTimezone).toISOString();
       
       console.log(`Calendar query window (UTC): ${searchStartUTC} to ${searchEndUTC}`);
-      console.log(`Making freebusy query for ${account.user.email} with timeZone: ${participantTimezone}`);
       
-      // Log request parameters for debugging
-      console.log(`Freebusy request params:`, {
-        timeMin: searchStartUTC,
-        timeMax: searchEndUTC,
-        items: [{ id: 'primary' }],
-        timeZone: participantTimezone
-      });
-      
-      // Try to query with primary calendar ID first
       const busy = await calendar.freebusy.query({
         requestBody: {
           timeMin: searchStartUTC,
@@ -244,9 +213,6 @@ export async function getAvailability(
           timeZone: participantTimezone
         }
       });
-
-      // Log the complete response for debugging
-      console.log(`Freebusy response for ${account.user.email}:`, JSON.stringify(busy.data, null, 2));
 
       if (busy.data.calendars?.primary?.busy) {
         console.log(`Found ${busy.data.calendars.primary.busy.length} busy slots for ${account.user.email}`);
@@ -261,19 +227,15 @@ export async function getAvailability(
           }));
         
         busyTimes.push(...userBusySlots);
-        
-        // Print out the first few busy slots for debugging
-        if (userBusySlots.length > 0) {
-          console.log(`Sample busy slots for ${account.user.email}:`);
-          userBusySlots.slice(0, 3).forEach((slot, i) => {
-            console.log(`  Slot ${i+1}: ${slot.start} to ${slot.end}`);
-          });
-        }
       } else {
-        console.log(`No busy slots found for ${account.user.email} - calendar might be completely free or there may be an issue`);
+        console.log(`No busy times found for ${account.user.email}`);
       }
     } catch (error) {
       console.error(`Failed to get busy times for ${account.user.email}:`, error);
+      // If we can't get calendar access for a participant, add them back to the without-access list
+      if (!participantsWithoutAccess.includes(account.user.email)) {
+        participantsWithoutAccess.push(account.user.email);
+      }
     }
   }
   
@@ -417,16 +379,6 @@ export async function getAvailability(
     conflictsWith?: string[];
   }[] = [];
   
-  // Track why slots are being rejected
-  const rejectionReasons = new Set<string>();
-  
-  // Track if we found any slots that were close but didn't work
-  const nearMisses: Array<{
-    start: Date;
-    end: Date;
-    reason: string;
-  }> = [];
-  
   while (isBefore(currentTime, searchEnd)) {
     const currentDay = currentTime.getDay(); // 0-6, where 0 is Sunday
     
@@ -470,83 +422,24 @@ export async function getAvailability(
       
       // Check if this slot conflicts with any busy times
       const conflicts: string[] = [];
-      let isConflicting = false;
       
-      // ENHANCED CONFLICT DETECTION - More conservative approach
-      // First, check if this slot overlaps with ANY busy time
-      isConflicting = busyTimes.some(busy => {
+      const isConflicting = busyTimes.some(busy => {
         const busyStart = new Date(busy.start);
         const busyEnd = new Date(busy.end);
         
-        // STRICTER CONFLICT DETECTION: Consider any overlap as a conflict
-        // Four possible overlap scenarios:
         const hasConflict = (
-          // 1. Slot start falls during busy time
-          (slotStartUTC >= busyStart && slotStartUTC < busyEnd) || 
-          // 2. Slot end falls during busy time
-          (slotEndUTC > busyStart && slotEndUTC <= busyEnd) || 
-          // 3. Busy time contained within slot
-          (slotStartUTC <= busyStart && slotEndUTC >= busyEnd) ||
-          // 4. Slot contained within busy time
-          (slotStartUTC >= busyStart && slotEndUTC <= busyEnd)
+          (slotStartUTC >= busyStart && slotStartUTC < busyEnd) || // Slot start during busy time
+          (slotEndUTC > busyStart && slotEndUTC <= busyEnd) || // Slot end during busy time
+          (slotStartUTC <= busyStart && slotEndUTC >= busyEnd) // Busy time contained within slot
         );
         
-        // For debugging, log detected conflicts
         if (hasConflict && 'userEmail' in busy) {
-          const conflictUser = busy.userEmail as string;
-          conflicts.push(conflictUser);
-          console.log(`🚫 CONFLICT DETECTED: Slot ${slotStart.toISOString()} to ${slotEnd.toISOString()} conflicts with busy time for ${conflictUser} (${busyStart.toISOString()} to ${busyEnd.toISOString()})`);
+          conflicts.push(busy.userEmail as string);
         }
         
         return hasConflict;
       });
 
-      // Double-check with manual events as well
-      if (!isConflicting) {
-        // Get any manual events from the database that overlap with this time slot
-        const manualEventsForSlot = await prisma.manualEvent.findMany({
-          where: {
-            OR: [
-              // Event starts during slot
-              { start: { gte: slotStartUTC, lt: slotEndUTC } },
-              // Event ends during slot
-              { end: { gt: slotStartUTC, lte: slotEndUTC } },
-              // Event contains slot
-              { 
-                AND: [
-                  { start: { lte: slotStartUTC } },
-                  { end: { gte: slotEndUTC } }
-                ]
-              },
-              // Slot contains event
-              { 
-                AND: [
-                  { start: { gte: slotStartUTC } },
-                  { end: { lte: slotEndUTC } }
-                ]
-              }
-            ]
-          },
-          include: {
-            user: {
-              select: {
-                email: true
-              }
-            }
-          }
-        });
-        
-        if (manualEventsForSlot.length > 0) {
-          isConflicting = true;
-          manualEventsForSlot.forEach(event => {
-            if (event.user?.email) {
-              conflicts.push(event.user.email);
-              console.log(`🚫 MANUAL EVENT CONFLICT: Slot ${slotStart.toISOString()} to ${slotEnd.toISOString()} conflicts with manual event for ${event.user.email}`);
-            }
-          });
-        }
-      }
-      
       // Store this slot for debugging
       allSlots.push({
         start: slotStart,
@@ -555,18 +448,12 @@ export async function getAvailability(
         conflictsWith: conflicts.length > 0 ? conflicts : undefined
       });
       
-      // If this slot doesn't conflict with any busy times, add it to available slots
+      // Only add available slots
       if (!isConflicting) {
-        // Add to available slots with just the required properties
         availableSlots.push({
           start: slotStart,
           end: slotEnd
         });
-        
-        // Log more details for debugging
-        if (conflicts.length > 0) {
-          console.log(`⚠️ Anomaly: Slot marked available despite conflicts: ${JSON.stringify(conflicts)}`);
-        }
       }
     }
     
@@ -617,92 +504,66 @@ export async function getAvailability(
     console.log(`${i+1}. ${slot.readableTime} (${slot.timeOfDay})`);
   });
   
-  // Before returning available slots, apply strict validation
-  const validatedSlots = sortedSlots.filter(slot => 
-    isValidTimeSlot(slot, busyTimes, {
-      start: `${Math.floor(workStart)}:${(workStart % 1) * 60 || '00'}`,
-      end: `${Math.floor(workEnd)}:${(workEnd % 1) * 60 || '00'}`
-    }, userTimezone)
-  );
+  // If any participants don't have calendar access, include that in the response
+  const response: any = {
+    success: true,
+    availableTimes: sortedSlots.slice(0, 10).map(slot => slot.start.toISOString()),
+    richTimeInfo: richTimeSlots,
+    timezone: userTimezone,
+    userPreferences: userPreferences,
+    hasUnregisteredParticipants,
+    unregisteredParticipants: participantsWithoutAccess
+  };
 
-  console.log(`Found ${validatedSlots.length} valid slots after strict validation`);
-  
-  // After checking all slots, if we have no available times, provide detailed feedback
-  if (validatedSlots.length === 0) {
-    let warningMessage = "No available times found. ";
-    
-    if (rejectionReasons.size > 0) {
-      warningMessage += "Here's what we found:\n";
-      rejectionReasons.forEach(reason => {
-        warningMessage += `- ${formatRejectionReason(reason)}\n`;
-      });
-    }
-    
-    // If we have near misses, suggest alternatives
-    if (nearMisses.length > 0) {
-      warningMessage += "\nHere are some times that were close but didn't work:\n";
-      nearMisses.slice(0, 3).forEach(miss => {
-        warningMessage += `- ${format(miss.start, 'MMM d, h:mm a')} (${miss.reason})\n`;
-      });
-      warningMessage += "\nTry adjusting your time preferences or duration for more options.";
-    }
-    
-    return {
-      success: false,
-      availableTimes: [],
-      warnings: [warningMessage],
-      hasUnregisteredParticipants: participantsWithoutAccess.length > 0,
-      unregisteredParticipants: participantsWithoutAccess,
-      timezone: userTimezone,
-      userPreferences: {
-        workDays: userPreferences.map(pref => pref.workDays),
-        workingHours: userWorkingHours,
-        timezone: userTimezone,
-        meetingPreferences: timePreference ? { timeOfDay: timePreference } : undefined
-      }
-    };
+  if (participantsWithoutAccess.length > 0) {
+    response.warning = `No calendar access for: ${participantsWithoutAccess.join(', ')}. Suggested times are based on standard working hours and may not reflect their actual availability.`;
   }
   
-  // Return properly formatted response
-  return {
-    success: true,
-    availableTimes: validatedSlots,
-    hasUnregisteredParticipants: participantsWithoutAccess.length > 0,
-    unregisteredParticipants: participantsWithoutAccess,
-    warnings: participantsWithoutAccess.length > 0 ? 
-      [`No calendar access for: ${participantsWithoutAccess.join(', ')}. Suggested times are based on standard working hours.`] : 
-      undefined,
-    timezone: userTimezone,
-    userPreferences: userPreferences
-  };
+  console.log('==== END CALENDAR AVAILABILITY CHECK ====\n');
+  return response;
 }
 
 // Helper function to get working hours based on user preferences
-function applyWorkingHoursPreferences(preferences: any[], userEmail: string): UserWorkingHoursPreference | null {
-  // Find the current user's preferences
-  const userPref = preferences.find(pref => pref.email === userEmail);
+function applyWorkingHoursPreferences(startTime: Date, endTime: Date, workingHours: UserWorkingHoursPreference): { start: Date, end: Date } {
+  const start = new Date(startTime);
+  const end = new Date(endTime);
   
-  if (userPref?.workingHours?.start && userPref?.workingHours?.end) {
-    console.log(`Found specific working hours for ${userEmail}: ${userPref.workingHours.start} to ${userPref.workingHours.end}`);
-    return {
-      start: userPref.workingHours.start,
-      end: userPref.workingHours.end
-    };
+  try {
+    if (workingHours.start) {
+      // Parse the hours and minutes
+      const startParts = workingHours.start.split(':');
+      const startHours = parseInt(startParts[0], 10);
+      const startMinutes = startParts.length > 1 ? parseInt(startParts[1], 10) : 0;
+      
+      // If start time is earlier than working hours, adjust to working hours start
+      const currentHours = start.getHours();
+      const currentMinutes = start.getMinutes();
+      
+      if (currentHours < startHours || (currentHours === startHours && currentMinutes < startMinutes)) {
+        start.setHours(startHours, startMinutes, 0, 0);
+      }
+    }
+    
+    if (workingHours.end) {
+      // Parse the hours and minutes
+      const endParts = workingHours.end.split(':');
+      const endHours = parseInt(endParts[0], 10);
+      const endMinutes = endParts.length > 1 ? parseInt(endParts[1], 10) : 0;
+      
+      // If end time is later than working hours, adjust to working hours end
+      const currentHours = end.getHours();
+      const currentMinutes = end.getMinutes();
+      
+      if (currentHours > endHours || (currentHours === endHours && currentMinutes > endMinutes)) {
+        end.setHours(endHours, endMinutes, 0, 0);
+      }
+    }
+  } catch (error) {
+    console.error('Error parsing working hours preferences:', error);
+    // If there's an error, just return the original times
   }
   
-  // Check if we have a timezone but no working hours - this indicates a partial preference
-  if (userPref?.timezone && (!userPref?.workingHours?.start || !userPref?.workingHours?.end)) {
-    console.log(`Found partial preference for ${userEmail}, checking UserPreferences table...`);
-    // The fetchUserPreferences function now handles checking both tables
-  }
-  
-  // Some logging to help diagnose why preferences might not be found
-  if (userEmail) {
-    console.log(`Could not find specific working hours for ${userEmail}`);
-    console.log(`Available preferences: ${preferences.map(p => p.email).join(', ')}`);
-  }
-  
-  return null;
+  return { start, end };
 }
 
 // Get time of day description
@@ -768,9 +629,8 @@ function sortSlotsByPreference(slots: TimeSlot[], preference?: string): TimeSlot
 }
 
 // Fetch user preferences for all participants
-export async function fetchUserPreferences(participants: string[]) {
-  // First fetch calendar preferences
-  const calendarPreferences = await prisma.calendarPreferences.findMany({
+async function fetchUserPreferences(participants: string[]) {
+  const userPreferences = await prisma.calendarPreferences.findMany({
     where: {
       user: {
         email: {
@@ -787,81 +647,14 @@ export async function fetchUserPreferences(participants: string[]) {
       }
     }
   });
-
-  // Now also fetch the more comprehensive UserPreferences if they exist
-  const userPreferences = await prisma.userPreferences.findMany({
-    where: {
-      user: {
-        email: {
-          in: participants
-        }
-      }
-    },
-    include: {
-      user: {
-        select: {
-          email: true
-        }
-      }
-    }
-  });
-
-  // Log what we found to help debug
-  console.log(`Found ${calendarPreferences.length} CalendarPreferences and ${userPreferences.length} UserPreferences`);
   
-  if (userPreferences.length > 0) {
-    console.log('User Preferences working hours examples:');
-    userPreferences.slice(0, 2).forEach(pref => {
-      console.log(`${pref.user.email}: ${JSON.stringify(pref.workingHours)}`);
-    });
-  }
-  
-  if (calendarPreferences.length > 0) {
-    console.log('Calendar Preferences working hours examples:');
-    calendarPreferences.slice(0, 2).forEach(pref => {
-      if (pref.workingHours) {
-        console.log(`${pref.user.email}: ${JSON.stringify(pref.workingHours)}`);
-      } else {
-        console.log(`${pref.user.email}: No working hours defined`);
-      }
-    });
-  }
-
-  // Combine the preferences, with UserPreferences taking precedence when both exist
-  return participants.map(email => {
-    // Find the specific preferences for this email
-    const calPref = calendarPreferences.find(pref => pref.user.email === email);
-    const userPref = userPreferences.find(pref => pref.user.email === email);
-    
-    // Log what was found for debugging
-    if (userPref) {
-      console.log(`Found UserPreferences for ${email} with working hours:`, userPref.workingHours);
-    } else if (calPref?.workingHours) {
-      console.log(`Found CalendarPreferences for ${email} with working hours:`, calPref.workingHours);
-    } else {
-      console.log(`Could not find specific working hours for ${email}`);
-    }
-    
-    // If we have UserPreferences, these take priority
-    if (userPref) {
-      return {
-        email,
-        workDays: userPref.workDays || [1, 2, 3, 4, 5], // Default to weekdays
-        workingHours: userPref.workingHours, // This should be { start: 'HH:MM', end: 'HH:MM' }
-        timezone: userPref.timezone,
-        meetingPreferences: calPref?.user.meetingPreferences
-      };
-    }
-    
-    // Otherwise, fall back to CalendarPreferences
-    return {
-      email,
-      workDays: calPref?.workDays || [1, 2, 3, 4, 5], // Default to weekdays
-      workingHours: calPref?.workingHours || { start: '09:00', end: '17:00' },
-      timezone: calPref?.timezone || 'UTC',
-      meetingPreferences: calPref?.user.meetingPreferences
-    };
-  });
+  return userPreferences.map(pref => ({
+    email: pref.user.email,
+    workDays: pref.workDays || [1, 2, 3, 4, 5], // Default to weekdays
+    workingHours: pref.workingHours || { start: '09:00', end: '17:00' },
+    timezone: pref.timezone || 'UTC',
+    meetingPreferences: pref.user.meetingPreferences
+  }));
 }
 
 // This function should check if the hour is after the start working hour,
@@ -894,54 +687,3 @@ const isWithinWorkingHours = (date: Date, workingHours: UserWorkingHoursPreferen
   
   return isAfterOrAtStart && isBeforeOrAtEnd;
 };
-
-// Add this new validation function
-function isValidTimeSlot(
-  slot: TimeSlot,
-  busyTimes: CalendarBusySlot[],
-  workingHours: UserWorkingHoursPreference,
-  userTimezone: string
-): boolean {
-  // Convert slot times to user timezone for comparison
-  const slotStart = utcToZonedTime(slot.start, userTimezone);
-  const slotEnd = utcToZonedTime(slot.end, userTimezone);
-  
-  // 1. Check if slot is within working hours
-  if (!isWithinWorkingHours(slotStart, workingHours) || !isWithinWorkingHours(slotEnd, workingHours)) {
-    console.log(`Slot rejected: Outside working hours ${workingHours.start}-${workingHours.end}`);
-    return false;
-  }
-  
-  // 2. Check for any overlap with busy times
-  for (const busy of busyTimes) {
-    const busyStart = parseISO(busy.start);
-    const busyEnd = parseISO(busy.end);
-    
-    if (isWithinInterval(slotStart, { start: busyStart, end: busyEnd }) ||
-        isWithinInterval(slotEnd, { start: busyStart, end: busyEnd }) ||
-        isWithinInterval(busyStart, { start: slotStart, end: slotEnd })) {
-      console.log(`Slot rejected: Overlaps with busy time ${busy.start}-${busy.end}`);
-      return false;
-    }
-  }
-  
-  return true;
-}
-
-// Helper function to format rejection reasons
-function formatRejectionReason(reason: string): string {
-  switch (reason) {
-    case 'outside_work_hours':
-      return "The time falls outside of working hours";
-    case 'busy':
-      return "One or more participants have calendar conflicts";
-    case 'buffer_needed':
-      return "Not enough buffer time around existing meetings";
-    case 'too_early':
-      return "The time is earlier than the participant's preferred start time";
-    case 'too_late':
-      return "The time is later than the participant's preferred end time";
-    default:
-      return reason;
-  }
-}

@@ -84,7 +84,7 @@ export default function UserPreferences({
       // Clean up preferences object to remove properties not in the database schema
       const { meetingTypes, virtualPlatforms, ...cleanedPreferences } = preferences;
       
-      // First save general preferences
+      // Save user preferences which now include all calendar-related settings
       const response = await fetch('/api/preferences', {
         method: 'POST',
         headers: {
@@ -105,32 +105,11 @@ export default function UserPreferences({
         throw new Error(errorMessage);
       }
       
-      // Also save calendar-specific preferences
-      const calendarPreferencesData = {
-        workDays: preferences.workDays,
-        workingHours: preferences.workingHours,
-        timezone: preferences.timezone
-      };
+      // NOTE: We no longer need to duplicate the calendar preferences as they're
+      // now consolidated in UserPreferences. The CalendarPreferences endpoint
+      // updates UserPreferences for backward compatibility.
       
-      const calendarResponse = await fetch('/api/calendar/preferences', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(calendarPreferencesData),
-      });
-      
-      let calendarResponseData;
-      try {
-        calendarResponseData = await calendarResponse.json();
-      } catch (e) {
-        console.error('Error parsing calendar preferences response:', e);
-      }
-      
-      if (!calendarResponse.ok) {
-        const errorMessage = calendarResponseData?.error || 'Failed to save calendar preferences';
-        throw new Error(errorMessage);
-      }
+      console.log('Preferences saved successfully');
       
       onClose();
     } catch (error) {
