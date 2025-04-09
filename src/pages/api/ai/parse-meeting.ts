@@ -1,10 +1,10 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import OpenAI from 'openai';
 import { searchEmailContacts } from '@/lib/google';
-import { extractNames } from '@/lib/nlp';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '../auth/[...nextauth]';
 import { prisma } from '@/lib/prisma';
+import { UserPreferencesData } from '@/types/preferences';
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -44,11 +44,9 @@ async function resolveParticipants(req: NextApiRequest, participants: string[]):
     // Search Gmail history for this name
     try {
       const contacts = await searchEmailContacts(req, [participant]);
-      if (contacts && contacts.length > 0) {
-        // Use the most confident match
-        const bestMatch = contacts[0];
-        resolvedParticipants.push(bestMatch.email);
-        continue;
+      const matchedList = contacts[participant];
+      if (matchedList && matchedList.length > 0) {
+        resolvedParticipants.push(matchedList[0].email);
       }
     } catch (error) {
       console.error('Error searching contacts:', error);
@@ -66,58 +64,36 @@ export default async function handler(
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  try {
-    const session = await getServerSession(req, res, authOptions);
-    if (!session?.user?.email) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
+  const session = await getServerSession(req, res, authOptions);
+  if (!session?.user?.email) {
+    return res.status(401).json({ error: 'Not authenticated' });
+  }
 
+  try {
     const { prompt } = req.body;
     if (!prompt) {
-      return res.status(400).json({ error: 'Missing prompt' });
+      return res.status(400).json({ error: 'Prompt is required' });
     }
 
     // Get user preferences for context
-    const userPrefs = await prisma.userPreferences.findUnique({
-      where: { userId: session.user.id }
-    });
+    const userPrefs = await prisma.userPreferences.findFirst({
+      where: { user: { email: session.user.email } }
+    }) as UserPreferencesData | null;
 
-    // Use OpenAI to parse the meeting request
     const completion = await openai.chat.completions.create({
-      model: "gpt-4-turbo-preview",
+      model: 'gpt-4-turbo-preview',
       messages: [{
         role: "system",
-        content: `You are a smart meeting assistant. Given a natural language request from a user, your job is to interpret it and return a structured JSON object that captures the user's intent and context.
+        content: `You are a meeting scheduling assistant. Extract meeting details from the user's message.
+Parse the following information into a JSON object:
+1. Meeting title
+2. Meeting preferences (time of day, duration, location type)
+3. Time constraints (start/end dates, specific time if mentioned)
+4. Participant names or emails (extract these directly from the message)
 
-Return ONLY a JSON object in this exact format:
-{
-  "title": "Short, human-readable meeting title",
-  "preferences": {
-    "timePreference": "morning" | "afternoon" | "evening",
-    "durationType": "30min" | "1hour" | "2hours",
-    "locationType": "coffee" | "restaurant" | "bar" | "office" | "virtual"
-  },
-  "location": "Optional location name or address if specified",
-  "timeConstraints": {
-    "startDate": "Earliest possible date (ISO format)",
-    "endDate": "Latest acceptable date (ISO format)",
-    "specificTime": "Optional 24-hour time (HH:mm) if explicitly mentioned"
-  },
-  "participants": ["List of emails or names if present in the prompt"]
-}
-
-Interpret timing, tone, and meaning like a human would:
-- "Next week" means Monday–Friday of the following calendar week
-- "Coffee" implies morning; "happy hour" implies late afternoon or early evening
-- Avoid suggesting times too soon unless clearly stated (e.g. not 10 minutes from now)
-- Always generate a future time window based on the user's intent
-- Respect context even if it's subtle
-
-User's working hours: ${userPrefs?.workingHours?.start || '09:00'} - ${userPrefs?.workingHours?.end || '17:00'}
-User's preferred meeting duration: ${userPrefs?.defaultDuration || 30} minutes
+Consider the user's preferences:
+Working hours: ${userPrefs?.workingHours?.start || '09:00'} - ${userPrefs?.workingHours?.end || '17:00'}
 User's timezone: ${userPrefs?.timezone || 'America/Los_Angeles'}
-
-If time is vague (e.g. "soon" or "sometime this month"), make a reasonable guess and return a time window.
 
 DO NOT include explanations or extra text — only return the final JSON result.`
       }, {
@@ -140,12 +116,8 @@ DO NOT include explanations or extra text — only return the final JSON result.
       throw new Error('Invalid response format from OpenAI');
     }
 
-    // Extract and resolve participant emails
-    const extractedNames = extractNames(prompt);
-    const participants = await resolveParticipants(req, [
-      ...extractedNames,
-      ...(parsed.participants || [])
-    ]);
+    // Resolve participant emails directly from OpenAI's extracted participants
+    const participants = await resolveParticipants(req, parsed.participants || []);
 
     // Add the current user as a participant if not already included
     if (!participants.includes(session.user.email)) {

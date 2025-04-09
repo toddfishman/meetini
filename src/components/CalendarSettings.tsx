@@ -60,7 +60,7 @@ export default function CalendarSettings() {
 
       setAccounts(accountsData);
       setPreferences(preferencesData);
-    } catch (err) {
+    } catch {
       setError('Failed to load calendar settings. Please try again.');
     } finally {
       setIsLoading(false);
@@ -84,7 +84,7 @@ export default function CalendarSettings() {
         default:
           throw new Error('Unsupported calendar provider');
       }
-    } catch (err) {
+    } catch {
       setError('Failed to connect calendar. Please try again.');
     }
   };
@@ -101,7 +101,7 @@ export default function CalendarSettings() {
       }
 
       setAccounts(accounts.filter(account => account.provider !== provider));
-    } catch (err) {
+    } catch {
       setError('Failed to disconnect calendar. Please try again.');
     }
   };
@@ -121,7 +121,7 @@ export default function CalendarSettings() {
 
       const updatedPreferences = await res.json();
       setPreferences(updatedPreferences);
-    } catch (err) {
+    } catch {
       setError('Failed to update preferences. Please try again.');
     }
   };

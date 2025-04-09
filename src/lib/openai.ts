@@ -1,10 +1,10 @@
 import OpenAI from 'openai';
-import { extractNames } from './nlp';
 import { searchEmailContacts } from './google';
-import type { NextApiRequest } from 'next';
+import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from './prisma';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
+import { UserPreferencesData } from '@/types/preferences';
 
 // Initialize OpenAI client with environment variable validation
 if (!process.env.OPENAI_API_KEY) {
@@ -38,70 +38,29 @@ export interface ParsedMeetingRequest {
 }
 
 export async function parseMeetingRequest(req: NextApiRequest, prompt: string): Promise<ParsedMeetingRequest> {
-  const session = await getServerSession(req, authOptions);
+  const session = await getServerSession(req, {} as NextApiResponse, authOptions);
   if (!session?.user?.email) {
-    throw new Error('No authenticated user found');
+    throw new Error('Not authenticated');
   }
 
-  // Get user preferences for context
-  const userPrefs = await prisma.userPreferences.findUnique({
-    where: { userId: session.user.id }
-  });
+  // Get user preferences
+  const userPrefs = await prisma.userPreferences.findFirst({
+    where: { user: { email: session.user.email } }
+  }) as UserPreferencesData | null;
 
-  // Use OpenAI to parse the request
-  const completion = await openai.createChatCompletion({
-    model: "gpt-4-turbo-preview",
+  const completion = await openai.chat.completions.create({
+    model: 'gpt-4-turbo-preview',
     messages: [{
       role: "system",
-      content: `You are a smart meeting assistant. Given a natural language request from a user, your job is to interpret it and return a structured JSON object that captures the user's intent and context.
+      content: `You are a meeting scheduling assistant. Extract meeting details from the user's message.
+Parse the following information into a JSON object:
+1. Meeting title
+2. Meeting preferences (time of day, duration, location type)
+3. Time constraints (start/end dates, specific time if mentioned)
+4. Participant names or emails (extract these directly from the message)
 
-Return ONLY a JSON object in this exact format:
-{
-  "title": "Short, human-readable meeting title",
-  "preferences": {
-    "timePreference": "morning" | "afternoon" | "evening",
-    "durationType": "30min" | "1hour" | "2hours",
-    "locationType": "coffee" | "restaurant" | "bar" | "office" | "virtual"
-  },
-  "location": "Optional location name or address if specified",
-  "timeConstraints": {
-    "startDate": "Earliest possible date (ISO format)",
-    "endDate": "Latest acceptable date (ISO format)",
-    "specificTime": "Optional 24-hour time (HH:mm) if explicitly mentioned"
-  },
-  "participants": ["List of emails or names if present in the prompt"]
-}
-
-CRITICAL TIME HANDLING RULES:
-1. For "next week":
-   - startDate: Next Monday at 9am
-   - endDate: Next Friday at 5pm
-2. For "this week":
-   - startDate: Tomorrow at 9am
-   - endDate: This Friday at 5pm
-3. For "tomorrow":
-   - startDate: Tomorrow at 9am
-   - endDate: Tomorrow at 5pm
-4. For vague times like "soon":
-   - startDate: Tomorrow at 9am
-   - endDate: 5 business days from tomorrow at 5pm
-
-MEETING TYPE RULES:
-1. Coffee meetings:
-   - Default to morning (9am-11am)
-   - Duration: 30min
-2. Happy hours:
-   - Time: 4pm-6pm
-   - Duration: 1hour
-3. Regular meetings:
-   - Duration: 1hour unless specified
-   - Respect working hours
-
-NEVER schedule:
-- In the past
-- Same day unless explicitly requested
-- Outside of working hours: ${userPrefs?.workingHours?.start || '09:00'} - ${userPrefs?.workingHours?.end || '17:00'}
-
+Consider the user's preferences:
+Working hours: ${userPrefs?.workingHours?.start || '09:00'} - ${userPrefs?.workingHours?.end || '17:00'}
 User's timezone: ${userPrefs?.timezone || 'America/Los_Angeles'}
 
 DO NOT include explanations or extra text — only return the final JSON result.`
@@ -125,12 +84,8 @@ DO NOT include explanations or extra text — only return the final JSON result.
     throw new Error('Invalid response format from OpenAI');
   }
 
-  // Extract and resolve participant emails
-  const extractedNames = extractNames(prompt);
-  const participants = await resolveParticipants(req, [
-    ...extractedNames,
-    ...(parsed.participants || [])
-  ]);
+  // Resolve participant emails directly from OpenAI's extracted participants
+  const participants = await resolveParticipants(req, parsed.participants || []);
 
   // Add the current user as a participant if not already included
   if (!participants.includes(session.user.email)) {
@@ -156,10 +111,9 @@ async function resolveParticipants(req: NextApiRequest, participants: string[]):
     // Search Gmail history for this name
     try {
       const contacts = await searchEmailContacts(req, [participant]);
-      if (contacts && contacts.length > 0) {
-        // Use the most confident match
-        const bestMatch = contacts[0];
-        resolvedParticipants.push(bestMatch.email);
+      const matchedList = contacts[participant];
+      if (matchedList && matchedList.length > 0) {
+        resolvedParticipants.push(matchedList[0].email);
       }
     } catch (error) {
       console.error('Error searching contacts:', error);

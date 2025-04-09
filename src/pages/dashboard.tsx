@@ -11,6 +11,8 @@ import UserPreferencesWrapper from '../components/UserPreferencesWrapper';
 import { Box, Button } from '@mui/material';
 import SettingsIcon from '@mui/icons-material/Settings';
 import { UserPreferencesData } from '../types/preferences';
+import OnboardingModal from '../components/OnboardingModal';
+import MeetiniChat from '../components/MeetiniChat';
 
 interface CalendarEvent {
   id: string;
@@ -135,6 +137,24 @@ export default function Dashboard() {
     },
   });
 
+  // Constants
+  const MAX_PARTICIPANTS = 30;
+  const PARTICIPANT_WARNING_THRESHOLD = 20;
+  const defaultPreferences: UserPreferencesData = {
+    workingHours: {
+      start: '09:00',
+      end: '17:00',
+    },
+    workDays: [1, 2, 3, 4, 5],
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    meetingTypes: ['Virtual', 'In Person'],
+    virtualPlatforms: ['Zoom', 'Google Meet', 'Microsoft Teams'],
+    emailNotifications: true,
+    smsNotifications: false,
+    defaultDuration: 30,
+    defaultMeetingType: 'virtual',
+  };
+
   console.log('Dashboard Session:', {
     status,
     hasSession: !!session,
@@ -143,6 +163,7 @@ export default function Dashboard() {
     user: session?.user,
   });
 
+  // State declarations
   const [meetiniInvites, setMeetiniInvites] = useState<MeetiniInvite[]>([]);
   const [inviteLoading, setInviteLoading] = useState(false);
   const [error, setError] = useState<ErrorState | null>(null);
@@ -155,6 +176,18 @@ export default function Dashboard() {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [initialPrompt, setInitialPrompt] = useState<string | null>(null);
   const [showCalendar, setShowCalendar] = useState(false);
+  const [activeTab, setActiveTab] = useState<'sent' | 'received'>('received');
+  const [isPendingSearch, setIsPendingSearch] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [transcript, setTranscript] = useState('');
+  const [isPreferencesModalOpen, setIsPreferencesModalOpen] = useState(false);
+  const [preferences, setPreferences] = useState<UserPreferencesData>(defaultPreferences);
+  const [isSaving, setIsSaving] = useState(false);
+  const [preferencesOpen, setPreferencesOpen] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [manualContacts, setManualContacts] = useState<Contact[]>([]);
+  const [manualSearchQuery, setManualSearchQuery] = useState('');
+  const [manualSearchResults, setManualSearchResults] = useState<Contact[]>([]);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmationDialogProps>({
     isOpen: false,
     title: '',
@@ -170,32 +203,6 @@ export default function Dashboard() {
     onClose: () => setToastState(prev => ({ ...prev, show: false }))
   });
   const [meetingType, setMeetingType] = useState<{ type: string | undefined; confidence: number }>({ type: undefined, confidence: 0 });
-  const [showManualSetup, setShowManualSetup] = useState(false);
-  const [activeTab, setActiveTab] = useState<'sent' | 'received'>('received');
-  const [isPendingSearch, setIsPendingSearch] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [transcript, setTranscript] = useState('');
-  const [isPreferencesModalOpen, setIsPreferencesModalOpen] = useState(false);
-  const [preferences, setPreferences] = useState<UserPreferencesData>({
-    workingHours: {
-      start: '09:00',
-      end: '17:00',
-    },
-    workDays: [1, 2, 3, 4, 5],
-    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    meetingTypes: ['Virtual', 'In Person'],
-    virtualPlatforms: ['Zoom', 'Google Meet', 'Microsoft Teams'],
-    emailNotifications: true,
-    smsNotifications: false,
-    defaultDuration: 30,
-    defaultMeetingType: 'virtual',
-  });
-  const [isSaving, setIsSaving] = useState(false);
-  const [preferencesOpen, setPreferencesOpen] = useState(false);
-
-  const MAX_PARTICIPANTS = 30;
-  const PARTICIPANT_WARNING_THRESHOLD = 20;
-
   const [meetingDetails, setMeetingDetails] = useState({
     title: '',
     startDate: new Date().toISOString().split('T')[0],
@@ -211,20 +218,90 @@ export default function Dashboard() {
     notes: ''
   });
 
-  // Add state for manual setup
-  const [manualContacts, setManualContacts] = useState<Contact[]>([]);
-  const [manualSearchQuery, setManualSearchQuery] = useState('');
-  const [manualSearchResults, setManualSearchResults] = useState<Contact[]>([]);
-  const [manualMeetingDetails, setManualMeetingDetails] = useState({
-    title: '',
-    location: '',
-    proposedTimes: [] as string[],
-    preferences: {
-      timePreference: '',
-      durationType: '',
-      locationType: ''
+  // Type guards
+  const isUnauthenticated = useCallback((status: string): status is 'unauthenticated' => status === 'unauthenticated', []);
+  const isAuthenticated = useCallback((status: string): status is 'authenticated' => status === 'authenticated', []);
+
+  // Callbacks
+  const handleOpenPreferences = useCallback(() => {
+    setPreferencesOpen(true);
+  }, []);
+
+  const handlePreferenceChange = useCallback((key: keyof UserPreferencesData, value: any) => {
+    setPreferences(prev => ({ ...prev, [key]: value }));
+  }, []);
+
+  const handleWorkDayToggle = useCallback((day: number) => {
+    setPreferences(prev => {
+      const newWorkDays = prev.workDays.includes(day)
+        ? prev.workDays.filter(d => d !== day)
+        : [...prev.workDays, day].sort();
+      return { ...prev, workDays: newWorkDays };
+    });
+  }, []);
+
+  const handleMeetingTypeToggle = useCallback((type: string) => {
+    setPreferences(prev => {
+      const currentMeetingTypes = prev.meetingTypes || [];
+      const newTypes = currentMeetingTypes.includes(type)
+        ? currentMeetingTypes.filter(t => t !== type)
+        : [...currentMeetingTypes, type];
+      return { ...prev, meetingTypes: newTypes };
+    });
+  }, []);
+
+  const handlePlatformToggle = useCallback((platform: string) => {
+    setPreferences(prev => {
+      const currentPlatforms = prev.virtualPlatforms || [];
+      const newPlatforms = currentPlatforms.includes(platform)
+        ? currentPlatforms.filter(p => p !== platform)
+        : [...currentPlatforms, platform];
+      return { ...prev, virtualPlatforms: newPlatforms };
+    });
+  }, []);
+
+  // Effects
+  useEffect(() => {
+    const fetchPreferences = async () => {
+      if (status !== 'authenticated') {
+        console.log('Not authenticated yet, skipping preferences fetch');
+        return;
+      }
+      
+      try {
+        console.log('Fetching preferences...');
+        const response = await fetch('/api/preferences');
+        console.log('Preferences response status:', response.status);
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('Error response:', errorText);
+          
+          if (response.status === 401) {
+            console.log('Not authenticated, redirecting to login');
+            router.push('/');
+            return;
+          }
+          
+          throw new Error(`Failed to fetch preferences: ${errorText}`);
+        }
+        
+        const data = await response.json();
+        console.log('Preferences data:', data);
+        setPreferences(data);
+        
+        // Check if this is a new user (no ID means these are default preferences)
+        setShowOnboarding(!data.id);
+      } catch (error) {
+        console.error('Error fetching preferences:', error);
+        setShowOnboarding(false);
+      }
+    };
+
+    if (status === 'authenticated') {
+      fetchPreferences();
     }
-  });
+  }, [status, router]);
 
   const fetchInvites = useCallback(async () => {
     if (!session?.accessToken) {
@@ -254,10 +331,6 @@ export default function Dashboard() {
     }
   }, [session]);
 
-  // Type guard for session status
-  const isUnauthenticated = (status: string): status is 'unauthenticated' => status === 'unauthenticated';
-  const isAuthenticated = (status: string): status is 'authenticated' => status === 'authenticated';
-
   useEffect(() => {
     if (status === 'loading') {
       console.log('Session loading...');
@@ -279,15 +352,11 @@ export default function Dashboard() {
       router.push('/');
       return;
     }
-  }, [session, router, status]);
-
-  useEffect(() => {
-    if (status === 'loading') return;
 
     if (session?.accessToken) {
       fetchInvites().catch(console.error);
     }
-  }, [status, session, fetchInvites]);
+  }, [status, session, router, fetchInvites]);
 
   useEffect(() => {
     if (isUnauthenticated(status)) {
@@ -312,7 +381,7 @@ export default function Dashboard() {
       const { openCreateModal, ...query } = router.query;
       router.replace({ pathname: router.pathname, query }, undefined, { shallow: true });
     }
-  }, [router.query, initialPrompt]);
+  }, [router.query, initialPrompt, router]);
 
   useEffect(() => {
     const fetchPreferences = async () => {
@@ -343,55 +412,23 @@ export default function Dashboard() {
         const data = await response.json();
         console.log('Preferences data:', data);
         setPreferences(data);
+        
+        // Check if this is a new user (no ID means these are default preferences)
+        if (!data.id) {
+          console.log('New user detected, showing onboarding');
+          setShowOnboarding(true);
+        } else {
+          console.log('Existing user, skipping onboarding');
+          setShowOnboarding(false);
+        }
       } catch (error) {
         console.error('Error fetching preferences:', error);
+        setShowOnboarding(false); // Ensure modal is hidden on error
       }
     };
 
     fetchPreferences();
   }, [status, router]);
-
-  useEffect(() => {
-    if (status === 'loading') return;
-
-    if (!session?.accessToken) {
-      router.push('/');
-      return;
-    }
-  }, [session, router, status]);
-
-  useEffect(() => {
-    if (status === 'loading') return;
-
-    if (session?.accessToken) {
-      fetchInvites().catch(console.error);
-    }
-  }, [status, session, fetchInvites]);
-
-  useEffect(() => {
-    if (isUnauthenticated(status)) {
-      router.replace('/');
-    } else if (isAuthenticated(status) && !session?.error) {
-      // Only fetch data if we have a valid session
-      fetchInvites().catch(console.error);
-    }
-  }, [status, session, router, fetchInvites]);
-
-  useEffect(() => {
-    // Check for prompt or openCreateModal in URL when component mounts
-    const prompt = router.query.prompt as string;
-    const shouldOpenModal = router.query.openCreateModal === 'true';
-    
-    if (prompt && !initialPrompt) {
-      setInitialPrompt(prompt);
-      setIsCreateModalOpen(true);
-    } else if (shouldOpenModal) {
-      setIsCreateModalOpen(true);
-      // Remove the query parameter without page reload
-      const { openCreateModal, ...query } = router.query;
-      router.replace({ pathname: router.pathname, query }, undefined, { shallow: true });
-    }
-  }, [router.query, initialPrompt]);
 
   // Handle manual contact search
   const handleManualContactSearch = useCallback(async (query: string) => {
@@ -401,7 +438,13 @@ export default function Dashboard() {
     }
 
     try {
-      const response = await fetch(`/api/contacts/search?q=${encodeURIComponent(query)}`);
+      const response = await fetch('/api/contacts/search', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ query })
+      });
       const data = await response.json();
 
       if (!response.ok) {
@@ -599,7 +642,14 @@ export default function Dashboard() {
       setError(null);
 
       console.log('Searching contacts with query:', query);
-      const response = await fetch(`/api/contacts/search?q=${encodeURIComponent(query)}`);
+      const response = await fetch('/api/contacts/search', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: JSON.stringify({ query })
+      });
       
       // Handle non-JSON responses first
       let data: SearchResponse;
@@ -674,8 +724,18 @@ export default function Dashboard() {
         message: data.message || ''
       });
 
-      // Auto-select high confidence matches (90% or higher)
-      const highConfidenceContacts = allContacts.filter(contact => contact.confidence >= 0.9);
+      // Only auto-select contacts with very high confidence (95% or higher)
+      // AND whose name closely matches the extracted name (to avoid partial matches)
+      const highConfidenceContacts = allContacts.filter(contact => {
+        const matchedName = contact.matchedName?.toLowerCase() || '';
+        const extractedNames = query.toLowerCase().split(/\s+/);
+        const searchName = extractedNames.find((name: string) => 
+          matchedName.includes(name) || 
+          name.includes(matchedName)
+        );
+        return contact.confidence >= 0.95 && searchName;
+      });
+
       if (highConfidenceContacts.length > 0) {
         setSelectedContacts(prev => {
           const newSet = new Set(prev);
@@ -744,11 +804,13 @@ export default function Dashboard() {
 
     try {
       console.log('Manual search triggered for query:', prompt);
-      const response = await fetch(`/api/contacts/search?q=${encodeURIComponent(prompt)}`, {
-        method: 'GET',
+      const response = await fetch('/api/contacts/search', {
+        method: 'POST',
         headers: {
+          'Content-Type': 'application/json',
           'Accept': 'application/json',
-        }
+        },
+        body: JSON.stringify({ query: prompt })
       });
 
       // Handle non-JSON responses first
@@ -824,8 +886,18 @@ export default function Dashboard() {
         message: data.message || ''
       });
 
-      // Auto-select high confidence matches (90% or higher)
-      const highConfidenceContacts = allContacts.filter(contact => contact.confidence >= 0.9);
+      // Only auto-select contacts with very high confidence (95% or higher)
+      // AND whose name closely matches the extracted name (to avoid partial matches)
+      const highConfidenceContacts = allContacts.filter(contact => {
+        const matchedName = contact.matchedName?.toLowerCase() || '';
+        const extractedNames = prompt.toLowerCase().split(/\s+/);
+        const searchName = extractedNames.find((name: string) => 
+          matchedName.includes(name) || 
+          name.includes(matchedName)
+        );
+        return contact.confidence >= 0.95 && searchName;
+      });
+
       if (highConfidenceContacts.length > 0) {
         setSelectedContacts(prev => {
           const newSet = new Set(prev);
@@ -1217,84 +1289,9 @@ export default function Dashboard() {
     }
   }, []);
 
-  useEffect(() => {
-    if (status === 'loading') return;
-
-    if (!session?.accessToken) {
-      router.push('/');
-      return;
-    }
-  }, [session, router, status]);
-
-  useEffect(() => {
-    if (status === 'loading') return;
-
-    if (session?.accessToken) {
-      fetchInvites().catch(console.error);
-    }
-  }, [status, session, fetchInvites]);
-
-  useEffect(() => {
-    if (isUnauthenticated(status)) {
-      router.replace('/');
-    } else if (isAuthenticated(status) && !session?.error) {
-      // Only fetch data if we have a valid session
-      fetchInvites().catch(console.error);
-    }
-  }, [status, session, router, fetchInvites]);
-
-  useEffect(() => {
-    // Check for prompt or openCreateModal in URL when component mounts
-    const prompt = router.query.prompt as string;
-    const shouldOpenModal = router.query.openCreateModal === 'true';
-    
-    if (prompt && !initialPrompt) {
-      setInitialPrompt(prompt);
-      setIsCreateModalOpen(true);
-    } else if (shouldOpenModal) {
-      setIsCreateModalOpen(true);
-      // Remove the query parameter without page reload
-      const { openCreateModal, ...query } = router.query;
-      router.replace({ pathname: router.pathname, query }, undefined, { shallow: true });
-    }
-  }, [router.query, initialPrompt]);
-
   // Move filteredInvites definition before the return statement
   const filteredInvites = meetiniInvites.filter(invite => invite.type === activeTab);
   console.log('Filtering invites:', { activeTab, invites: meetiniInvites, filtered: filteredInvites });
-
-  const handlePreferenceChange = useCallback((key: keyof UserPreferencesData, value: any) => {
-    setPreferences(prev => ({ ...prev, [key]: value }));
-  }, []);
-
-  const handleWorkDayToggle = useCallback((day: number) => {
-    setPreferences(prev => {
-      const newWorkDays = prev.workDays.includes(day)
-        ? prev.workDays.filter(d => d !== day)
-        : [...prev.workDays, day].sort();
-      return { ...prev, workDays: newWorkDays };
-    });
-  }, []);
-
-  const handleMeetingTypeToggle = useCallback((type: string) => {
-    setPreferences(prev => {
-      const currentMeetingTypes = prev.meetingTypes || [];
-      const newTypes = currentMeetingTypes.includes(type)
-        ? currentMeetingTypes.filter(t => t !== type)
-        : [...currentMeetingTypes, type];
-      return { ...prev, meetingTypes: newTypes };
-    });
-  }, []);
-
-  const handlePlatformToggle = useCallback((platform: string) => {
-    setPreferences(prev => {
-      const currentPlatforms = prev.virtualPlatforms || [];
-      const newPlatforms = currentPlatforms.includes(platform)
-        ? currentPlatforms.filter(p => p !== platform)
-        : [...currentPlatforms, platform];
-      return { ...prev, virtualPlatforms: newPlatforms };
-    });
-  }, []);
 
   const handleSavePreferences = useCallback(async () => {
     setIsSaving(true);
@@ -1525,7 +1522,7 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="min-h-screen bg-[#1a1d23] text-white">
+    <div className="min-h-screen bg-[#1a1d1e]">
       <Navbar />
       <div className="max-w-7xl mx-auto px-4 pt-36">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -1537,69 +1534,27 @@ export default function Dashboard() {
                   <h1 className="text-3xl font-bold text-[#22c55e] tracking-tight">Make A Meetini Happen Here! 🍸</h1>
                 </div>
 
-                <div className="mb-6">
-                  <div className="relative ring-1 ring-[#22c55e]/20 rounded-lg bg-[#1a1d23] shadow-lg hover:shadow-[#22c55e]/5 transition-shadow">
-                    <div className="absolute left-4 top-1/2 -translate-y-1/2 z-10">
-                      <button
-                        onClick={isListening ? stopListening : startListening}
-                        className={`p-2 rounded-full transition-colors ${
-                          isListening ? 'text-red-500 animate-pulse' : 'text-[#22c55e] hover:text-[#22c55e]/80'
-                        }`}
-                      >
-                        <FaMicrophone className="w-5 h-5" />
-                      </button>
-                    </div>
-                    <textarea
-                      value={prompt}
-                      onChange={handlePromptChange}
-                      placeholder="Talk or Text: e.g. Schedule a coffee with Joe tomorrow morning"
-                      className={`w-full pl-14 pr-24 py-4 bg-transparent text-gray-100 rounded-lg focus:ring-2 focus:ring-[#22c55e] focus:border-transparent placeholder-gray-500 transition-all duration-200 ${
-                        isProcessing ? 'opacity-50' : 'opacity-100'
-                      } focus:shadow-[0_0_15px_rgba(34,197,94,0.1)]`}
-                      rows={3}
-                      disabled={isProcessing}
-                    />
-                    <div className="absolute right-4 top-1/2 -translate-y-1/2 flex items-center space-x-2">
-                      <button
-                        onClick={() => setPrompt('')}
-                        className={`p-2 text-gray-400 hover:text-white transition-colors ${
-                          !prompt ? 'opacity-0' : 'opacity-100'
-                        }`}
-                        disabled={!prompt || isProcessing}
-                      >
-                        Clear
-                      </button>
-                      <button
-                        onClick={handleSearch}
-                        disabled={!prompt || isProcessing}
-                        className={`px-4 py-2 bg-[#22c55e] text-white rounded-lg transition-colors ${
-                          !prompt || isProcessing
-                            ? 'opacity-50 cursor-not-allowed'
-                            : 'hover:bg-[#22c55e]/80'
-                        }`}
-                      >
-                        {isProcessing ? 'Processing...' : 'Search'}
-                      </button>
-                    </div>
-                  </div>
-                  {transcript && (
-                    <p className="mt-2 text-sm text-gray-400">
-                      Heard: {transcript}
-                    </p>
-                  )}
-                  {error && (
-                    <div className="mt-4 p-3 bg-red-500/10 border border-red-500/20 rounded-lg">
-                      <div className="flex items-center text-red-400">
-                        <span className="text-sm">
-                          {error.message}
-                        </span>
-                      </div>
-                    </div>
-                  )}
+                {/* Replace the old prompt area with MeetiniChat */}
+                <div className="bg-[#1a1d23] rounded-lg">
+                  <MeetiniChat
+                    isOpen={true}
+                    onClose={() => {}}
+                    onSuccess={() => {
+                      fetchInvites();
+                      setToastState({
+                        show: true,
+                        message: 'Meeting scheduled successfully!',
+                        type: 'success',
+                        onClose: () => setToastState(prev => ({ ...prev, show: false }))
+                      });
+                    }}
+                    initialPrompt={initialPrompt || undefined}
+                    embedded={true}
+                  />
                 </div>
 
                 {/* Manual Setup Section */}
-                <div className="mb-8 p-6 bg-[#1a1d23] rounded-lg border border-[#2f3336]">
+                <div className="mt-8 p-6 bg-[#1a1d23] rounded-lg border border-[#2f3336]">
                   <h3 className="text-xl font-semibold text-[#22c55e] mb-4">Manual Setup for Meetini</h3>
                   <div className="relative flex items-center">
                     <button
@@ -1669,16 +1624,21 @@ export default function Dashboard() {
                                       <div className="w-10 h-10 rounded-full bg-gray-600 flex items-center justify-center text-white font-semibold">
                                         {contact?.name?.[0] || email[0]}
                                       </div>
-                                      <div className="ml-3">
+                                      <div className="ml-3 flex-grow">
                                         <div className="font-medium">{contact?.name || email}</div>
                                         <div className="text-sm text-gray-400">{email}</div>
                                       </div>
-                                      <button
-                                        onClick={() => toggleContactSelection(email)}
-                                        className="ml-auto text-gray-400 hover:text-red-500 transition-colors"
-                                      >
-                                        Remove
-                                      </button>
+                                      <div className="flex items-center space-x-2">
+                                        <span className="text-xs px-2 py-1 rounded-full bg-[#22c55e]/10 text-[#22c55e]">
+                                          {Math.round((contact?.confidence || 0) * 100)}% match
+                                        </span>
+                                        <button
+                                          onClick={() => toggleContactSelection(email)}
+                                          className="ml-2 text-gray-400 hover:text-red-500 transition-colors"
+                                        >
+                                          Remove
+                                        </button>
+                                      </div>
                                     </div>
                                   </div>
                                 );
@@ -1694,10 +1654,10 @@ export default function Dashboard() {
                         {/* Suggested Participants */}
                         <div className="space-y-2">
                           <h5 className="text-xs font-medium text-gray-500">SUGGESTED PARTICIPANTS</h5>
-                          <div className="space-y-2">
+                          <div className="space-y-2 max-h-[300px] overflow-y-auto">
                             {meetingSummary.contacts
                               .filter(contact => !selectedContacts.has(contact.email))
-                              .sort((a, b) => b.confidence - a.confidence) // Sort by confidence
+                              .sort((a, b) => b.confidence - a.confidence)
                               .map((contact, index) => (
                                 <button
                                   key={`${contact.email}-${index}`}
@@ -1722,11 +1682,16 @@ export default function Dashboard() {
                                   </div>
                                   <div className="flex items-center space-x-2">
                                     <div className="text-xs text-gray-400">
-                                      Confidence: {Math.round(contact.confidence * 100)}%
+                                      Match: {Math.round(contact.confidence * 100)}%
                                     </div>
-                                    {contact.confidence >= 0.9 && (
+                                    {contact.confidence >= 0.95 && (
                                       <span className="px-2 py-1 text-xs bg-[#22c55e]/20 text-[#22c55e] rounded-full">
                                         Best Match
+                                      </span>
+                                    )}
+                                    {contact.confidence >= 0.85 && contact.confidence < 0.95 && (
+                                      <span className="px-2 py-1 text-xs bg-yellow-500/20 text-yellow-500 rounded-full">
+                                        Good Match
                                       </span>
                                     )}
                                   </div>
@@ -2283,6 +2248,32 @@ export default function Dashboard() {
         onPreferenceChange={handlePreferenceChange}
         onWorkDayToggle={handleWorkDayToggle}
       />
+      
+      <OnboardingModal
+        open={showOnboarding}
+        onClose={() => setShowOnboarding(false)}
+        onOpenPreferences={() => {
+          setShowOnboarding(false);
+          setPreferencesOpen(true);
+        }}
+      />
+
+      {/* Add test button */}
+      <Button
+        onClick={() => setShowOnboarding(true)}
+        sx={{
+          position: 'fixed',
+          bottom: '20px',
+          right: '20px',
+          backgroundColor: '#22c55e',
+          color: 'white',
+          '&:hover': {
+            backgroundColor: '#1ea550'
+          }
+        }}
+      >
+        Test Onboarding
+      </Button>
     </div>
   );
 }

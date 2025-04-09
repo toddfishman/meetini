@@ -130,8 +130,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       
       console.log('User created successfully:', newUser.email);
       
-      // Return default preferences
-      return res.status(200).json(defaultPreferences);
+      // Return default preferences with user ID to indicate new user
+      return res.status(200).json({
+        ...defaultPreferences,
+        id: null // Explicitly indicate this is a new user
+      });
     } catch (error) {
       console.error('Error creating user:', error);
       return res.status(500).json({ error: 'Failed to create user' });
@@ -141,14 +144,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === 'GET') {
     try {
       console.log('GET /api/preferences - User:', user.email);
-      console.log('User preferences:', user.preferences);
       
       if (!user.preferences) {
         console.log('No preferences found, returning default preferences');
-        return res.status(200).json(defaultPreferences);
+        return res.status(200).json({
+          ...defaultPreferences,
+          id: null // Indicate this is equivalent to a new user
+        });
       }
       
-      return res.status(200).json(user.preferences);
+      // Return preferences with user ID to indicate existing user
+      return res.status(200).json({
+        ...user.preferences,
+        id: user.id
+      });
     } catch (error) {
       console.error('Error fetching preferences:', error);
       return res.status(500).json({ error: 'Failed to fetch preferences' });

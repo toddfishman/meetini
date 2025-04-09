@@ -93,6 +93,37 @@ export async function getAvailability(
   let workStart = 9; // Default to 9 AM
   let workEnd = 17;  // Default to 5 PM
   
+  // Get initial preferred days from user preferences
+  const userPreferredDays = getPreferredDays(userPreferences);
+  let effectivePreferredDays = [...userPreferredDays];
+  
+  // Map string-based time preference to hours
+  if (typeof timePreference === 'string') {
+    if (timePreference === 'morning' || timePreference.includes('breakfast') || timePreference.includes('coffee')) {
+      workStart = 8;
+      workEnd = 12;
+    } else if (timePreference === 'afternoon' || timePreference.includes('lunch')) {
+      workStart = 12;
+      workEnd = 17;
+    } else if (timePreference.includes('happy hour')) {
+      workStart = 16; // 4 PM
+      workEnd = 18;   // 6 PM
+      // Force weekday preference for happy hours
+      if (!effectivePreferredDays.length) {
+        effectivePreferredDays = [1, 2, 3, 4, 5]; // Mon-Fri
+      }
+    } else if (timePreference === 'evening' || timePreference.includes('dinner')) {
+      workStart = 18;
+      workEnd = 21;
+    } else if (timePreference === 'extended') {
+      // Extended hours for difficult scheduling situations
+      workStart = 7;
+      workEnd = 21;
+    }
+  }
+  
+  console.log(`Working hours: ${workStart}:00 to ${workEnd}:00`);
+  
   // Also get organizer's account
   const token = await getToken({ req });
   let organizerHasAccess = false;
@@ -145,26 +176,6 @@ export async function getAvailability(
       console.log(`Adjusted working hours for unregistered participants: ${workStart}:00 to ${workEnd}:00`);
     }
   }
-  
-  // Map string-based time preference to hours, but don't override user preferences
-  if (typeof timePreference === 'string' && !userWorkingHours) {
-    if (timePreference === 'morning' || timePreference.includes('breakfast') || timePreference.includes('coffee')) {
-      workStart = 8;
-      workEnd = 12;
-    } else if (timePreference === 'afternoon' || timePreference.includes('lunch')) {
-      workStart = 12;
-      workEnd = 17;
-    } else if (timePreference === 'evening' || timePreference.includes('dinner') || timePreference.includes('happy hour')) {
-      workStart = 17;
-      workEnd = 20;
-    } else if (timePreference === 'extended') {
-      // Extended hours for difficult scheduling situations
-      workStart = 7;
-      workEnd = 21;
-    }
-  }
-  
-  console.log(`Working hours: ${workStart}:00 to ${workEnd}:00`);
   
   // Get busy times for all participants
   const busyTimes: CalendarBusySlot[] = [];
@@ -359,25 +370,18 @@ export async function getAvailability(
     busyTimes.push(...manualBusySlots);
   }
 
-  // Apply preferred days constraints from user preferences
-  const preferredDays = getPreferredDays(userPreferences);
-  
-  if (preferredDays.length > 0) {
-    console.log(`Preferred days: ${preferredDays.map(d => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d]).join(', ')}`);
-  } else {
-    console.log('No preferred days specified, using all days');
-  }
-  
   // If we have unregistered participants and no preferred days, 
   // default to weekdays (1-5) as it's more likely to work for professionals
-  const effectivePreferredDays = preferredDays.length > 0 
-    ? preferredDays 
-    : (hasUnregisteredParticipants ? [1, 2, 3, 4, 5] : []);
-    
-  if (hasUnregisteredParticipants && effectivePreferredDays.length > 0) {
-    console.log(`Using effective preferred days for unregistered participants: ${
+  if (hasUnregisteredParticipants && effectivePreferredDays.length === 0) {
+    effectivePreferredDays = [1, 2, 3, 4, 5];
+  }
+  
+  if (effectivePreferredDays.length > 0) {
+    console.log(`Using effective preferred days: ${
       effectivePreferredDays.map(d => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d]).join(', ')
     }`);
+  } else {
+    console.log('No preferred days specified, using all days');
   }
 
   // Generate available slots in user's timezone
@@ -478,24 +482,22 @@ export async function getAvailability(
         const busyStart = new Date(busy.start);
         const busyEnd = new Date(busy.end);
         
-        // STRICTER CONFLICT DETECTION: Consider any overlap as a conflict
-        // Four possible overlap scenarios:
         const hasConflict = (
-          // 1. Slot start falls during busy time
-          (slotStartUTC >= busyStart && slotStartUTC < busyEnd) || 
-          // 2. Slot end falls during busy time
-          (slotEndUTC > busyStart && slotEndUTC <= busyEnd) || 
-          // 3. Busy time contained within slot
-          (slotStartUTC <= busyStart && slotEndUTC >= busyEnd) ||
-          // 4. Slot contained within busy time
-          (slotStartUTC >= busyStart && slotEndUTC <= busyEnd)
+          (slotStartUTC >= busyStart && slotStartUTC < busyEnd) || // Slot start during busy time
+          (slotEndUTC > busyStart && slotEndUTC <= busyEnd) || // Slot end during busy time
+          (slotStartUTC <= busyStart && slotEndUTC >= busyEnd) || // Busy time contained within slot
+          (slotStartUTC >= busyStart && slotEndUTC <= busyEnd)  // Slot completely contained within busy time
         );
         
-        // For debugging, log detected conflicts
-        if (hasConflict && 'userEmail' in busy) {
-          const conflictUser = busy.userEmail as string;
-          conflicts.push(conflictUser);
-          console.log(`🚫 CONFLICT DETECTED: Slot ${slotStart.toISOString()} to ${slotEnd.toISOString()} conflicts with busy time for ${conflictUser} (${busyStart.toISOString()} to ${busyEnd.toISOString()})`);
+        if (hasConflict) {
+          console.log(`🚨 Conflict detected:
+            Proposed slot: ${slotStartUTC.toISOString()} - ${slotEndUTC.toISOString()}
+            Conflicts with: ${busy.userEmail || 'Unknown user'}
+            Busy time: ${busyStart.toISOString()} - ${busyEnd.toISOString()}
+          `);
+          if ('userEmail' in busy) {
+            conflicts.push(busy.userEmail as string);
+          }
         }
         
         return hasConflict;
@@ -547,13 +549,21 @@ export async function getAvailability(
         }
       }
       
-      // Store this slot for debugging
+      // Store this slot for debugging with more details
       allSlots.push({
         start: slotStart,
         end: slotEnd,
         isAvailable: !isConflicting,
         conflictsWith: conflicts.length > 0 ? conflicts : undefined
       });
+      
+      // Double-check our conflict logic
+      if (!isConflicting && conflicts.length > 0) {
+        console.log(`⚠️ CRITICAL: Slot marked available despite ${conflicts.length} conflicts:
+          Slot: ${slotStart.toISOString()} - ${slotEnd.toISOString()}
+          Conflicts with: ${conflicts.join(', ')}
+        `);
+      }
       
       // If this slot doesn't conflict with any busy times, add it to available slots
       if (!isConflicting) {
@@ -739,10 +749,15 @@ function sortSlotsByPreference(slots: TimeSlot[], preference?: string): TimeSlot
     const aIsWeekend = [0, 6].includes(a.start.getDay());
     const bIsWeekend = [0, 6].includes(b.start.getDay());
     
-    const prefersWeekend = preference?.includes('weekend') || preference?.includes('social');
+    const prefersWeekend = preference?.includes('weekend');
     const prefersBusiness = preference?.includes('business') || preference?.includes('work');
+    const isHappyHour = preference?.includes('happy hour');
     
-    if (prefersWeekend) {
+    // Happy hours should be on weekdays
+    if (isHappyHour) {
+      if (!aIsWeekend && bIsWeekend) return -1;
+      if (aIsWeekend && !bIsWeekend) return 1;
+    } else if (prefersWeekend) {
       if (aIsWeekend && !bIsWeekend) return -1;
       if (!aIsWeekend && bIsWeekend) return 1;
     } else if (prefersBusiness) {
@@ -754,11 +769,22 @@ function sortSlotsByPreference(slots: TimeSlot[], preference?: string): TimeSlot
     const aHour = a.start.getHours();
     const bHour = b.start.getHours();
     
-    if (preference?.includes('morning') || preference?.includes('breakfast') || preference?.includes('coffee')) {
+    if (preference?.includes('happy hour')) {
+      // Prefer times closer to 4-6 PM
+      const aDistance = Math.min(
+        Math.abs(aHour - 16), // Distance from 4 PM
+        Math.abs(aHour - 17)  // Distance from 5 PM
+      );
+      const bDistance = Math.min(
+        Math.abs(bHour - 16), // Distance from 4 PM
+        Math.abs(bHour - 17)  // Distance from 5 PM
+      );
+      return aDistance - bDistance;
+    } else if (preference?.includes('morning') || preference?.includes('breakfast') || preference?.includes('coffee')) {
       return aHour - bHour; // Earlier is better
     } else if (preference?.includes('lunch')) {
       return Math.abs(aHour - 12) - Math.abs(bHour - 12); // Closer to noon is better
-    } else if (preference?.includes('evening') || preference?.includes('dinner') || preference?.includes('happy hour')) {
+    } else if (preference?.includes('evening') || preference?.includes('dinner')) {
       return bHour - aHour; // Later is better (but still within constraints)
     }
     

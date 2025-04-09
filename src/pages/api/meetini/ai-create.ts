@@ -41,84 +41,101 @@ async function validateSchedulingDecision(
 ): Promise<{ isValid: boolean; reason?: string; alternatives?: string[] }> {
   try {
     const proposedDate = new Date(proposedTime);
+    
+    // 1. Basic validation
     if (proposedDate < new Date()) {
       return { isValid: false, reason: 'Cannot schedule meetings in the past' };
     }
+
+    // 2. Create a proper time window for availability check
+    const proposedEnd = new Date(proposedDate);
+    proposedEnd.setMinutes(proposedEnd.getMinutes() + suggestedDuration);
     
-    const endTime = new Date(proposedDate);
-    endTime.setHours(endTime.getHours() + 1);
-    
-    // First, check calendar availability
-    const availability = await getAvailability(
+    // 3. First check the exact time slot
+    const exactTimeCheck = await getAvailability(
       req,
       participants,
       {
         startDate: proposedDate.toISOString(),
-        endDate: endTime.toISOString()
-      }
+        endDate: proposedEnd.toISOString()
+      },
+      undefined,  // No time preference for exact check
+      suggestedDuration
     );
-    
-    // If there's a calendar conflict, look for alternative times
-    if (!availability.success || !availability.availableTimes.length) {
-      // If it's a specific date request, look for other times on the same day
-      if (timeContext.type === 'specific') {
-        const dayStart = new Date(proposedDate);
-        dayStart.setHours(9, 0, 0, 0);
-        const dayEnd = new Date(proposedDate);
-        dayEnd.setHours(17, 0, 0, 0);
-        
-        const dayAvailability = await getAvailability(
-          req,
-          participants,
-          {
-            startDate: dayStart.toISOString(),
-            endDate: dayEnd.toISOString()
-          }
-        );
-        
-        if (dayAvailability.success && dayAvailability.availableTimes.length > 0) {
-          return {
-            isValid: false,
-            reason: `The requested time isn't available, but there are other times available on the same day`,
-            alternatives: dayAvailability.availableTimes.map(slot => slot.start.toISOString())
-          };
-        }
-      }
-      
-      return {
-        isValid: false,
-        reason: availability.warnings?.[0] || 'The requested time conflicts with existing calendar events'
-      };
-    }
-    
-    // For specific date requests, we'll be more lenient with preferences
-    if (timeContext.type === 'specific') {
-      // Still enforce basic working hours (e.g., not at 3 AM)
-      const hour = proposedDate.getHours();
-      if (hour < 7 || hour >= 22) {
-        return { 
-          isValid: false, 
-          reason: 'The requested time is outside reasonable working hours (7 AM - 10 PM)' 
+
+    // If exact time is available, do a double-check with a wider window
+    if (exactTimeCheck.success && exactTimeCheck.availableTimes.length > 0) {
+      // 4. Double-check with a wider window (+/- 1 hour) to catch edge cases
+      const bufferStart = new Date(proposedDate);
+      bufferStart.setHours(bufferStart.getHours() - 1);
+      const bufferEnd = new Date(proposedEnd);
+      bufferEnd.setHours(bufferEnd.getHours() + 1);
+
+      const doubleCheck = await getAvailability(
+        req,
+        participants,
+        {
+          startDate: bufferStart.toISOString(),
+          endDate: bufferEnd.toISOString()
+        },
+        undefined,
+        suggestedDuration
+      );
+
+      // Verify the proposed time is still in the available slots
+      const isStillAvailable = doubleCheck.availableTimes.some(slot => 
+        slot.start.getTime() === proposedDate.getTime() &&
+        slot.end.getTime() === proposedEnd.getTime()
+      );
+
+      if (!isStillAvailable) {
+        return {
+          isValid: false,
+          reason: 'Time slot conflicts detected in extended validation'
         };
       }
+
       return { isValid: true };
     }
     
-    // For non-specific requests, strictly validate against preferences
-    const isWithinContext = validateTimeAgainstContext(proposedDate, timeContext);
-    if (!isWithinContext) {
-      return { 
-        isValid: false, 
-        reason: 'The proposed time does not match requested time preferences' 
-      };
+    // If exact time isn't available, look for alternatives
+    // If it's a specific date request, look for other times on the same day
+    if (timeContext.type === 'specific') {
+      const dayStart = new Date(proposedDate);
+      dayStart.setHours(9, 0, 0, 0);
+      const dayEnd = new Date(proposedDate);
+      dayEnd.setHours(17, 0, 0, 0);
+      
+      const dayAvailability = await getAvailability(
+        req,
+        participants,
+        {
+          startDate: dayStart.toISOString(),
+          endDate: dayEnd.toISOString()
+        },
+        timeContext.timeOfDay,
+        suggestedDuration
+      );
+      
+      if (dayAvailability.success && dayAvailability.availableTimes.length > 0) {
+        return {
+          isValid: false,
+          reason: `The requested time isn't available, but there are other times available on the same day`,
+          alternatives: dayAvailability.availableTimes.map(slot => slot.start.toISOString())
+        };
+      }
     }
     
-    return { isValid: true };
+    return {
+      isValid: false,
+      reason: exactTimeCheck.warnings?.[0] || 'The requested time conflicts with existing calendar events'
+    };
+    
   } catch (error) {
-    console.error('Error validating scheduling decision:', error);
-    return { 
-      isValid: false, 
-      reason: 'Error validating scheduling decision' 
+    console.error('Error in validateSchedulingDecision:', error);
+    return {
+      isValid: false,
+      reason: 'An error occurred while validating the scheduling decision'
     };
   }
 }

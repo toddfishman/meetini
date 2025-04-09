@@ -1,3 +1,5 @@
+import { titleCase } from './utils';
+
 // Meeting-related terms categorized by type
 export const MEETING_TERMS = {
   general: [
@@ -42,33 +44,6 @@ export const MEETING_TERMS = {
     'urgent discussion', 'priority meeting'
   ]
 };
-
-/**
- * Converts a string to title case (first letter of each word capitalized)
- */
-function titleCase(str: string): string {
-  return str.toLowerCase().split(' ').map(word => 
-    word.charAt(0).toUpperCase() + word.slice(1)
-  ).join(' ');
-}
-
-// Common words that often appear in meeting requests but aren't names
-const COMMON_WORDS = new Set([
-  'meet', 'meeting', 'schedule', 'with', 'and', 'setup', 'set', 'up', 'organize',
-  'plan', 'discuss', 'catch', 'sync', 'connect', 'chat', 'talk', 'call', 'video',
-  'zoom', 'teams', 'morning', 'afternoon', 'evening', 'tomorrow', 'today', 'next',
-  'week', 'month', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday',
-  'saturday', 'sunday', 'minutes', 'hour', 'hours', 'virtual', 'in-person',
-  'coffee', 'lunch', 'dinner', 'breakfast', 'please', 'would', 'like', 'want',
-  'need', 'must', 'should', 'could', 'can', 'will', 'about', 'regarding',
-  'concerning', 'quick', 'brief', 'long', 'short', 'late', 'early'
-]);
-
-// Extracted name with its position in the input
-interface ExtractedName {
-  name: string;
-  position: number;
-}
 
 interface MeetingPattern {
   type: string;
@@ -207,136 +182,6 @@ export function detectMeetingPurpose(prompt: string): { type: string; confidence
     type: promptLower.includes('virtual') || promptLower.includes('zoom') ? 'Virtual Meeting' : 'Meeting',
     confidence: 0.6 
   };
-}
-
-/**
- * Extracts potential names from input text using basic heuristics.
- * This is a simple implementation that looks for words that could be names
- * by checking against common meeting-related terms.
- */
-export function extractNames(text: string): string[] {
-  // Don't try to extract names if the input is too short
-  if (text.length < 3) return [];
-
-  const nameGroups: ExtractedName[] = [];
-  let currentGroup: string[] = [];
-  let groupStart = -1;
-
-  // Special handling for time-related phrases
-  const timeRelatedPhrases = [
-    'late next week', 'early next week', 'late this week', 'early this week',
-    'next week', 'this week', 'next month', 'this month'
-  ];
-  
-  // Check if the full text contains any of these phrases and skip processing if it does
-  const lowerText = text.toLowerCase();
-  
-  // Check for email addresses first - if there are any, extract them directly
-  const emailRegex = /([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/gi;
-  const emailMatches = text.match(emailRegex);
-  
-  if (emailMatches && emailMatches.length > 0) {
-    console.log('Extracted email addresses:', emailMatches);
-    return emailMatches;
-  }
-  
-  if (timeRelatedPhrases.some(phrase => lowerText.includes(phrase))) {
-    // If the query is primarily about time preferences, don't extract names
-    // Simply return an empty array to indicate no contacts should be searched
-    if (text.split(' ').length <= 5) { // Short query primarily about time
-      console.log('Time-related phrase detected, skipping name extraction:', text);
-      return [];
-    }
-  }
-
-  // Split and normalize input
-  const words = lowerText.split(/\s+/).map(w => w.trim());
-  
-  // Only process if we have actual words
-  if (words.length === 0 || words[0].length < 2) {
-    return [];
-  }
-  
-  // If there's only one word and it's not in common words, treat it as a name
-  if (words.length === 1 && !COMMON_WORDS.has(words[0]) && words[0].length > 1) {
-    return [words[0]];
-  }
-  
-  // Process words with a sliding window
-  for (let i = 0; i < words.length; i++) {
-    const word = words[i];
-    const cleanWord = word.replace(/[.,!?]$/, '');
-    
-    // Skip very short words or single letters
-    if (cleanWord.length < 2) continue;
-
-    // Check for name group markers
-    if (['with', 'and', 'for', '@'].includes(cleanWord)) {
-      // Save current group if exists and has valid length
-      if (currentGroup.length > 0 && currentGroup.join(' ').length > 1) {
-        nameGroups.push({
-          name: currentGroup.join(' '),
-          position: groupStart
-        });
-        currentGroup = [];
-      }
-      groupStart = i + 1;
-      continue;
-    }
-
-    // Skip if it's a common word or looks like a time
-    if (
-      COMMON_WORDS.has(cleanWord) ||
-      /^\d{1,2}(:\d{2})?([ap]m)?$/i.test(cleanWord)
-    ) {
-      if (currentGroup.length > 0 && currentGroup.join(' ').length > 1) {
-        nameGroups.push({
-          name: currentGroup.join(' '),
-          position: groupStart
-        });
-        currentGroup = [];
-      }
-      groupStart = -1;
-      continue;
-    }
-
-    // If we're in a group or starting a new one
-    if (groupStart === -1) groupStart = i;
-    currentGroup.push(cleanWord);
-
-    // Check if this is the end of a name group
-    const nextWord = i < words.length - 1 ? words[i + 1].toLowerCase().replace(/[.,!?]$/, '') : '';
-    if (
-      !nextWord ||
-      ['with', 'and', 'for', '@'].includes(nextWord) ||
-      COMMON_WORDS.has(nextWord)
-    ) {
-      if (currentGroup.length > 0 && currentGroup.join(' ').length > 1) {
-        nameGroups.push({
-          name: currentGroup.join(' '),
-          position: groupStart
-        });
-        currentGroup = [];
-        groupStart = -1;
-      }
-    }
-  }
-
-  // Add any remaining group if it has valid length
-  if (currentGroup.length > 0 && currentGroup.join(' ').length > 1) {
-    nameGroups.push({
-      name: currentGroup.join(' '),
-      position: groupStart
-    });
-  }
-
-  // Sort by position and return unique names with minimum length
-  return [...new Set(
-    nameGroups
-      .sort((a, b) => a.position - b.position)
-      .map(group => group.name)
-      .filter(name => name.length > 2)
-  )];
 }
 
 /**

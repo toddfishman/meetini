@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { FaMicrophone, FaMicrophoneSlash } from 'react-icons/fa';
 
 interface Contact {
   email: string;
@@ -10,10 +11,29 @@ interface Contact {
   matchedName?: string;
 }
 
+interface ContentItem {
+  text: {
+    value: string;
+  };
+}
+
+interface MessageContent {
+  content: string | ContentItem[] | ContentItem;
+}
+
+interface ChatResponse {
+  messages: (string | MessageContent)[] | string;
+  threadId: string;
+  contactSuggestions?: Array<{
+    name: string;
+    email: string;
+  }>;
+}
+
 interface Message {
-  id: string;
-  role: 'assistant' | 'user';
+  role: 'user' | 'assistant';
   content: string[];
+  id: string;
 }
 
 interface MeetiniChatProps {
@@ -21,9 +41,10 @@ interface MeetiniChatProps {
   onClose: () => void;
   onSuccess: () => void;
   initialPrompt?: string;
+  embedded?: boolean;
 }
 
-export default function MeetiniChat({ isOpen, onClose, onSuccess, initialPrompt }: MeetiniChatProps) {
+export default function MeetiniChat({ isOpen, onClose, onSuccess, initialPrompt, embedded = false }: MeetiniChatProps) {
   const [messages, setMessages] = useState<Message[]>([{
     role: 'assistant',
     content: ['Hi! I can help you schedule a meeting. Just tell me who you want to meet with and any other details you\'d like to include.'],
@@ -34,6 +55,8 @@ export default function MeetiniChat({ isOpen, onClose, onSuccess, initialPrompt 
   const [selectedContacts, setSelectedContacts] = useState<Contact[]>([]);
   const [suggestedContacts, setSuggestedContacts] = useState<Contact[]>([]);
   const [threadId, setThreadId] = useState<string | null>(null);
+  const [isListening, setIsListening] = useState(false);
+  const [recordingError, setRecordingError] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -44,58 +67,132 @@ export default function MeetiniChat({ isOpen, onClose, onSuccess, initialPrompt 
     scrollToBottom();
   }, [messages]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const startListening = async () => {
+    if (!('webkitSpeechRecognition' in window)) {
+      setRecordingError('Speech recognition is not supported in your browser. Please use Chrome.');
+      return;
+    }
+
+    try {
+      const recognition = new window.webkitSpeechRecognition();
+      window.currentRecognition = recognition;
+
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = 'en-US';
+
+      recognition.onresult = (event: any) => {
+        const transcript = Array.from(event.results)
+          .map((result: any) => result[0].transcript)
+          .join(' ');
+        
+        if (transcript) {
+          setInputValue(transcript);
+        }
+      };
+
+      recognition.onerror = (event: any) => {
+        if (event.error !== 'no-speech') {
+          console.error('Speech recognition error:', event);
+          setRecordingError('Failed to recognize speech. Please try again.');
+        }
+        setIsListening(false);
+      };
+
+      recognition.onend = () => {
+        setIsListening(false);
+      };
+
+      setIsListening(true);
+      recognition.start();
+    } catch (error) {
+      console.error('Speech recognition error:', error);
+      setRecordingError('Failed to start voice recognition. Please try again.');
+      setIsListening(false);
+    }
+  };
+
+  const stopListening = () => {
+    if (window.currentRecognition) {
+      window.currentRecognition.stop();
+      window.currentRecognition = null;
+    }
+    setIsListening(false);
+  };
+
+  const handleSubmit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     if (!inputValue.trim() || isProcessing) return;
 
-    const userMessage = inputValue.trim();
-    console.log('Sending message:', userMessage);
-    
-    // Add user message immediately
-    setMessages(prev => [...prev, {
-      role: 'user',
-      content: [userMessage],
-      id: Date.now().toString()
-    }]);
-    
-    setInputValue('');
     setIsProcessing(true);
+    const userMessage: Message = {
+      role: 'user',
+      content: [inputValue.trim()],
+      id: `user-${Date.now()}`
+    };
+
+    setMessages((prevMessages: Message[]) => [...prevMessages, userMessage]);
+    setInputValue('');
 
     try {
       const response = await fetch('/api/assistant/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          message: userMessage,
-          threadId
-        })
+          message: inputValue.trim(),
+          threadId,
+          selectedContacts: selectedContacts.map(c => ({ email: c.email, name: c.name }))
+        }),
       });
 
-      if (!response.ok) {
-        throw new Error('Failed to send message');
-      }
-
-      const data = await response.json();
-      console.log('Assistant response:', data);
+      if (!response.ok) throw new Error('Failed to send message');
       
+      const data: ChatResponse = await response.json();
       setThreadId(data.threadId);
 
-      // Convert OpenAI messages to our format
-      const newMessages = data.messages.map((msg: any) => ({
-        role: msg.role,
-        content: msg.content.map((c: any) => c.text.value),
-        id: msg.id
-      }));
+      // Extract message content from the API response
+      const messageContent = Array.isArray(data.messages) 
+        ? data.messages.map(msg => {
+            if (typeof msg === 'string') return msg;
+            if (typeof msg === 'object' && msg.content) {
+              // Handle array of content items
+              if (Array.isArray(msg.content)) {
+                return msg.content.map(item => {
+                  if (typeof item === 'string') return item;
+                  if (item.text) return item.text.value || '';
+                  return '';
+                }).join('\n');
+              }
+              // Handle single content item
+              if (typeof msg.content === 'string') return msg.content;
+              if (msg.content.text) return msg.content.text.value || '';
+            }
+            return 'Message format not supported';
+          })
+        : [typeof data.messages === 'string' ? data.messages : 'I received your message but encountered an error processing it.'];
 
-      setMessages(newMessages.reverse()); // OpenAI returns newest first
+      const assistantMessage: Message = {
+        role: 'assistant',
+        content: messageContent,
+        id: `assistant-${Date.now()}`
+      };
 
+      setMessages((prevMessages: Message[]) => [...prevMessages, assistantMessage]);
+
+      if (data.contactSuggestions) {
+        setSuggestedContacts(data.contactSuggestions.map(contact => ({
+          ...contact,
+          confidence: 1,
+        })));
+      }
     } catch (error) {
-      console.error('Failed to process message:', error);
-      setMessages(prev => [...prev, {
+      console.error('Error:', error);
+      const errorMessage: Message = {
         role: 'assistant',
         content: ['Sorry, I encountered an error. Please try again.'],
-        id: 'error-' + Date.now()
-      }]);
+        id: `error-${Date.now()}`
+      };
+      setMessages((prevMessages: Message[]) => [...prevMessages, errorMessage]);
     } finally {
       setIsProcessing(false);
     }
@@ -156,10 +253,14 @@ export default function MeetiniChat({ isOpen, onClose, onSuccess, initialPrompt 
         throw new Error(error.error || 'Failed to create calendar event');
       }
 
-      // Add success message
+      // Add success message with proper Message type
       setMessages(prev => [
         ...prev,
-        { role: 'assistant', content: ['✨ Success! Calendar invites have been sent.'] }
+        {
+          role: 'assistant',
+          content: ['✨ Success! Calendar invites have been sent.'],
+          id: `success-${Date.now()}`
+        }
       ]);
 
       // Clear input and reset state
@@ -183,95 +284,100 @@ export default function MeetiniChat({ isOpen, onClose, onSuccess, initialPrompt 
     }
   };
 
+  const containerClass = embedded
+    ? "w-full bg-[#1a1d23] rounded-lg overflow-hidden"
+    : "fixed inset-0 z-50 overflow-hidden flex min-h-screen items-center justify-center p-4";
+
+  const chatContainerClass = embedded
+    ? "w-full"
+    : "relative bg-white dark:bg-gray-900 rounded-lg w-full max-w-2xl overflow-hidden";
+
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 overflow-hidden">
-      <div className="flex min-h-screen items-center justify-center p-4">
+    <div className={containerClass}>
+      {!embedded && (
         <div className="fixed inset-0 bg-black/50 transition-opacity" onClick={onClose} />
-        
-        <div className="relative bg-white dark:bg-gray-900 rounded-lg w-full max-w-2xl overflow-hidden">
-          {/* Header */}
-          <div className="flex items-center justify-between p-4 border-b dark:border-gray-700">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Schedule a Meeting</h2>
-            <button onClick={onClose} className="text-gray-500 hover:text-gray-700">
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
+      )}
+      
+      <div className={chatContainerClass}>
+        {/* Messages Area */}
+        <div className="h-[400px] overflow-y-auto p-4 space-y-4">
+          <AnimatePresence>
+            {messages.map((message) => (
+              <motion.div
+                key={message.id}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+                className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+              >
+                <div
+                  className={`max-w-[80%] rounded-lg p-3 ${
+                    message.role === 'user'
+                      ? 'bg-[#22c55e] text-white'
+                      : 'bg-[#2f3336] text-white'
+                  }`}
+                >
+                  {message.content.map((text, i) => (
+                    <div key={i} className="whitespace-pre-wrap">{text}</div>
+                  ))}
+                </div>
+              </motion.div>
+            ))}
+          </AnimatePresence>
+          <div ref={chatEndRef} />
+        </div>
+
+        {/* Input Area */}
+        <div className="p-4 border-t border-[#2f3336]">
+          {recordingError && (
+            <div className="mb-2 text-red-500 text-sm">{recordingError}</div>
+          )}
+          <div className="flex space-x-2">
+            <button
+              onClick={isListening ? stopListening : startListening}
+              className={`p-2 rounded-lg transition-colors ${
+                isListening
+                  ? 'bg-red-500 text-white'
+                  : 'bg-[#2f3336] text-[#22c55e] hover:bg-[#2f3336]/80'
+              }`}
+            >
+              {isListening ? <FaMicrophoneSlash size={20} /> : <FaMicrophone size={20} />}
+            </button>
+            <input
+              type="text"
+              value={inputValue}
+              onChange={(e) => setInputValue(e.target.value)}
+              onKeyPress={(e) => e.key === 'Enter' && handleSubmit(e)}
+              placeholder="Type your message..."
+              className="flex-1 p-2 bg-[#2f3336] border border-[#2f3336] rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#22c55e]"
+              disabled={isProcessing}
+            />
+            <button
+              onClick={handleSubmit}
+              disabled={isProcessing || !inputValue.trim()}
+              className="px-4 py-2 bg-[#22c55e] text-white rounded-lg hover:bg-[#22c55e]/80 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+            >
+              {isProcessing ? 'Sending...' : 'Submit'}
             </button>
           </div>
-
-          {/* Chat Messages */}
-          <div className="h-[400px] overflow-y-auto p-4 space-y-4">
-            <AnimatePresence>
-              {messages.map((message) => (
-                <motion.div
-                  key={message.id}
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0 }}
-                  className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                >
-                  <div
-                    className={`max-w-[80%] rounded-lg p-3 ${
-                      message.role === 'user'
-                        ? 'bg-[#22c55e] text-white'
-                        : message.role === 'assistant'
-                        ? 'bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-white'
-                        : 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100'
-                    }`}
-                  >
-                    {message.content.map((text, i) => (
-                      <div key={i} className="whitespace-pre-wrap">{text}</div>
-                    ))}
-                  </div>
-                </motion.div>
-              ))}
-            </AnimatePresence>
-            <div ref={chatEndRef} />
-          </div>
-
-          {/* Input Area */}
-          <div className="p-4 border-t dark:border-gray-700">
-            <div className="flex space-x-2">
-              <input
-                type="text"
-                value={inputValue}
-                onChange={(e) => setInputValue(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && handleSubmit(e)}
-                placeholder="Type your message..."
-                className="flex-1 p-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
-                disabled={isProcessing}
-              />
-              <button
-                onClick={handleSendMeetini}
-                disabled={isProcessing || selectedContacts.length === 0}
-                className="px-4 py-2 bg-[#22c55e] text-white rounded-lg hover:bg-[#22c55e]/80 disabled:opacity-50 whitespace-nowrap"
-              >
-                {isProcessing ? 'Sending...' : 'Send Meetini'}
-              </button>
-            </div>
-            {selectedContacts.length > 0 && (
-              <div className="mt-3 flex flex-wrap gap-2">
-                {selectedContacts.map(contact => (
+          {suggestedContacts.length > 0 && (
+            <div className="mt-3">
+              <div className="text-sm text-gray-400 mb-2">Found contacts:</div>
+              <div className="flex flex-wrap gap-2">
+                {suggestedContacts.map(contact => (
                   <div
                     key={contact.email}
-                    className="inline-flex items-center space-x-1 bg-[#22c55e]/10 text-[#22c55e] dark:text-[#22c55e] px-2 py-1 rounded-full text-sm"
+                    className="inline-flex items-center space-x-1 bg-[#2f3336] text-white px-2 py-1 rounded-lg text-sm"
                   >
                     <span>{contact.name}</span>
-                    <button
-                      onClick={() => setSelectedContacts(prev => prev.filter(c => c.email !== contact.email))}
-                      className="hover:text-[#22c55e]/80 dark:hover:text-[#22c55e]/80"
-                    >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                      </svg>
-                    </button>
+                    <span className="text-xs text-gray-400">({contact.email})</span>
                   </div>
                 ))}
               </div>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

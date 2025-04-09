@@ -8,11 +8,7 @@ interface Message {
   id: string;
 }
 
-interface AssistantChatProps {
-  onConfirmMeeting?: (meetingDetails: any) => void;
-}
-
-export default function AssistantChat({ onConfirmMeeting }: AssistantChatProps) {
+export default function AssistantChat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -74,10 +70,16 @@ export default function AssistantChat({ onConfirmMeeting }: AssistantChatProps) 
       
       setThreadId(data.threadId);
 
+      interface OpenAIMessage {
+        role: 'user' | 'assistant';
+        content: Array<{ text: { value: string } }>;
+        id: string;
+      }
+
       // Convert OpenAI messages to our format
-      const newMessages = data.messages.map((msg: any) => ({
+      const newMessages = data.messages.map((msg: OpenAIMessage) => ({
         role: msg.role,
-        content: msg.content.map((c: any) => c.text.value),
+        content: msg.content.map(c => c.text.value),
         id: msg.id
       }));
 

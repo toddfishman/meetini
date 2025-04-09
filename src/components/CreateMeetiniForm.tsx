@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { isContactPickerSupported, selectContacts } from '@/lib/contacts';
+
 import { CircularProgress, Alert } from '@mui/material';
 import { useSession } from 'next-auth/react';
 
 declare global {
   interface Window {
-    recognition: any;
-    webkitSpeechRecognition: any;
+    recognition: typeof webkitSpeechRecognition;
+    webkitSpeechRecognition: new () => webkitSpeechRecognition;
   }
 }
 
@@ -16,32 +16,6 @@ interface CreateMeetiniFormProps {
   onSuccess: () => void;
   initialPrompt?: string | null;
   mode?: 'ai' | 'manual';
-}
-
-interface Contact {
-  type: 'email' | 'phone';
-  value: string;
-  name?: string;
-}
-
-interface PickedContact {
-  email?: string;
-  phoneNumber?: string;
-  name?: string;
-}
-
-type ContactResult = { type: 'email'; value: string; name?: string } | { type: 'phone'; value: string; name?: string };
-
-interface FormData {
-  title: string;
-  contacts: Contact[];
-  location: string;
-  proposedTimes: string[];
-  preferences?: {
-    timePreference?: 'morning' | 'afternoon' | 'evening';
-    durationType?: '30min' | '1hour' | '2hours' | 'custom';
-    locationType?: 'coffee' | 'restaurant' | 'office' | 'virtual' | 'custom';
-  };
 }
 
 interface ContactSearchResult {
@@ -58,7 +32,7 @@ interface AssistantMessage {
   content: string[];
 }
 
-export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialPrompt }: CreateMeetiniFormProps) {
+export default function CreateMeetiniForm({ onClose, onSuccess, initialPrompt }: CreateMeetiniFormProps) {
   const { data: session } = useSession();
   const [searchResults, setSearchResults] = useState<{ [key: string]: ContactSearchResult[] }>({});
   const [selectedContacts, setSelectedContacts] = useState<ContactSearchResult[]>([]);
@@ -78,7 +52,11 @@ export default function CreateMeetiniForm({ isOpen, onClose, onSuccess, initialP
   const [unregisteredParticipants, setUnregisteredParticipants] = useState<string[]>([]);
   const [threadId, setThreadId] = useState<string | null>(null);
   const [messages, setMessages] = useState<AssistantMessage[]>([]);
-  const [conflictInfo, setConflictInfo] = useState<any>(null);
+  interface ConflictInfo {
+    message: string;
+    suggestion: string;
+  }
+  const [conflictInfo, setConflictInfo] = useState<ConflictInfo | null>(null);
 
   // Handle contact search when prompt changes
   useEffect(() => {

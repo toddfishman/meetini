@@ -41,13 +41,14 @@
     "luxon": "^3.5.0",
     "next": "15.1.4",
     "next-auth": "^4.24.11",
-    "openai": "^4.83.0",
+    "openai": "^4.93.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-error-boundary": "^5.0.0",
     "react-icons": "^5.5.0",
     "resend": "^4.1.1",
-    "twilio": "^5.4.2"
+    "twilio": "^5.4.2",
+    "zod": "^3.24.2"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
