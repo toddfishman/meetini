@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { FaMicrophone, FaMicrophoneSlash } from 'react-icons/fa';
+import { FaMicrophone, FaMicrophoneSlash, FaUserPlus, FaTimes } from 'react-icons/fa';
 
 interface Contact {
   email: string;
@@ -54,6 +54,9 @@ export default function MeetiniChat({ isOpen, onClose, onSuccess, initialPrompt,
   const [isProcessing, setIsProcessing] = useState(false);
   const [selectedContacts, setSelectedContacts] = useState<Contact[]>([]);
   const [suggestedContacts, setSuggestedContacts] = useState<Contact[]>([]);
+  const [showContactSearch, setShowContactSearch] = useState(false);
+  const [contactSearchInput, setContactSearchInput] = useState('');
+  const [contactSearchResults, setContactSearchResults] = useState<Contact[]>([]);
   const [threadId, setThreadId] = useState<string | null>(null);
   const [isListening, setIsListening] = useState(false);
   const [recordingError, setRecordingError] = useState<string | null>(null);
@@ -198,11 +201,45 @@ export default function MeetiniChat({ isOpen, onClose, onSuccess, initialPrompt,
     }
   };
 
+  const handleContactSearch = async (query: string) => {
+    if (!query.trim()) {
+      setContactSearchResults([]);
+      return;
+    }
+
+    try {
+      const response = await fetch('/api/contacts/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: query.trim() })
+      });
+
+      if (!response.ok) throw new Error('Failed to search contacts');
+      
+      const data = await response.json();
+      setContactSearchResults(data.contacts || []);
+    } catch (error) {
+      console.error('Error searching contacts:', error);
+    }
+  };
+
+  const addContact = (contact: Contact) => {
+    if (!selectedContacts.some(c => c.email === contact.email)) {
+      setSelectedContacts(prev => [...prev, contact]);
+    }
+    setContactSearchInput('');
+    setContactSearchResults([]);
+  };
+
+  const removeContact = (email: string) => {
+    setSelectedContacts(prev => prev.filter(c => c.email !== email));
+  };
+
   const handleSendMeetini = async () => {
     if (selectedContacts.length === 0) {
       setMessages(prev => [...prev, {
         role: 'assistant',
-        content: ['Please mention who you\'d like to meet with first.'],
+        content: ['Please select contacts for the meeting first.'],
         id: 'error-' + Date.now()
       }]);
       return;
@@ -210,40 +247,33 @@ export default function MeetiniChat({ isOpen, onClose, onSuccess, initialPrompt,
 
     setIsProcessing(true);
     try {
-      // Send to AI-create endpoint
       const response = await fetch('/api/meetini/ai-create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          message: `Please schedule this meeting with ${selectedContacts.map(c => c.name).join(', ')}`,
+          message: messages.filter(m => m.role === 'user').map(m => m.content.join(' ')).join('\n'),
           participants: selectedContacts.map(c => c.email)
         })
       });
 
-      if (!response.ok) {
-        throw new Error('Failed to create Meetini');
-      }
+      if (!response.ok) throw new Error('Failed to create Meetini');
 
       const data = await response.json();
-      if (data.error) {
-        throw new Error(data.error);
-      }
+      if (data.error) throw new Error(data.error);
 
-      // Use the suggested times from the Assistant
       if (!data.suggestedTimes?.length) {
         throw new Error('No suggested times available. Please try again.');
       }
 
-      // Create the calendar event with the suggested time
       const createResponse = await fetch('/api/meetini/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           invite: {
-            type: `Please schedule this meeting with ${selectedContacts.map(c => c.name).join(', ')}`,
+            type: messages.filter(m => m.role === 'user').map(m => m.content.join(' ')).join('\n'),
             participants: selectedContacts.map(c => ({ email: c.email })),
             suggestedTimes: data.suggestedTimes,
-            createdBy: 'user' // Replace with actual user email
+            createdBy: 'user'
           }
         })
       });
@@ -253,7 +283,6 @@ export default function MeetiniChat({ isOpen, onClose, onSuccess, initialPrompt,
         throw new Error(error.error || 'Failed to create calendar event');
       }
 
-      // Add success message with proper Message type
       setMessages(prev => [
         ...prev,
         {
@@ -262,10 +291,6 @@ export default function MeetiniChat({ isOpen, onClose, onSuccess, initialPrompt,
           id: `success-${Date.now()}`
         }
       ]);
-
-      // Clear input and reset state
-      setInputValue('');
-      setSelectedContacts([]);
 
       setTimeout(() => {
         onSuccess();
@@ -329,6 +354,66 @@ export default function MeetiniChat({ isOpen, onClose, onSuccess, initialPrompt,
           <div ref={chatEndRef} />
         </div>
 
+        {/* Selected Contacts */}
+        {selectedContacts.length > 0 && (
+          <div className="px-4 py-2 border-t border-[#2f3336]">
+            <div className="flex flex-wrap gap-2">
+              {selectedContacts.map(contact => (
+                <div
+                  key={contact.email}
+                  className="inline-flex items-center space-x-1 bg-[#22c55e]/10 text-[#22c55e] px-2 py-1 rounded-full text-sm"
+                >
+                  <span>{contact.name}</span>
+                  <button
+                    onClick={() => removeContact(contact.email)}
+                    className="hover:text-[#22c55e]/80"
+                  >
+                    <FaTimes size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Manual Contact Search */}
+        {showContactSearch && (
+          <div className="px-4 py-2 border-t border-[#2f3336]">
+            <div className="flex space-x-2">
+              <input
+                type="text"
+                value={contactSearchInput}
+                onChange={(e) => {
+                  setContactSearchInput(e.target.value);
+                  handleContactSearch(e.target.value);
+                }}
+                placeholder="Search contacts..."
+                className="flex-1 p-2 bg-[#2f3336] border border-[#2f3336] rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#22c55e]"
+              />
+              <button
+                onClick={() => setShowContactSearch(false)}
+                className="p-2 text-gray-400 hover:text-white"
+              >
+                <FaTimes size={20} />
+              </button>
+            </div>
+            {contactSearchResults.length > 0 && (
+              <div className="mt-2 space-y-1 max-h-32 overflow-y-auto">
+                {contactSearchResults.map(contact => (
+                  <button
+                    key={contact.email}
+                    onClick={() => addContact(contact)}
+                    className="w-full text-left p-2 hover:bg-[#2f3336] rounded-lg text-white text-sm flex justify-between items-center"
+                  >
+                    <span>{contact.name}</span>
+                    <span className="text-gray-400 text-xs">{contact.email}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Input Area */}
         <div className="p-4 border-t border-[#2f3336]">
           {recordingError && (
@@ -344,6 +429,13 @@ export default function MeetiniChat({ isOpen, onClose, onSuccess, initialPrompt,
               }`}
             >
               {isListening ? <FaMicrophoneSlash size={20} /> : <FaMicrophone size={20} />}
+            </button>
+            <button
+              onClick={() => setShowContactSearch(prev => !prev)}
+              className="p-2 rounded-lg bg-[#2f3336] text-[#22c55e] hover:bg-[#2f3336]/80"
+              title="Add contacts manually"
+            >
+              <FaUserPlus size={20} />
             </button>
             <input
               type="text"
@@ -361,19 +453,29 @@ export default function MeetiniChat({ isOpen, onClose, onSuccess, initialPrompt,
             >
               {isProcessing ? 'Sending...' : 'Submit'}
             </button>
+            <button
+              onClick={handleSendMeetini}
+              disabled={isProcessing || selectedContacts.length === 0}
+              className="px-4 py-2 bg-[#22c55e] text-white rounded-lg hover:bg-[#22c55e]/80 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+            >
+              Send Meetini
+            </button>
           </div>
+
+          {/* Suggested Contacts */}
           {suggestedContacts.length > 0 && (
             <div className="mt-3">
               <div className="text-sm text-gray-400 mb-2">Found contacts:</div>
               <div className="flex flex-wrap gap-2">
                 {suggestedContacts.map(contact => (
-                  <div
+                  <button
                     key={contact.email}
-                    className="inline-flex items-center space-x-1 bg-[#2f3336] text-white px-2 py-1 rounded-lg text-sm"
+                    onClick={() => addContact(contact)}
+                    className="inline-flex items-center space-x-1 bg-[#2f3336] text-white px-2 py-1 rounded-lg text-sm hover:bg-[#2f3336]/80"
                   >
                     <span>{contact.name}</span>
                     <span className="text-xs text-gray-400">({contact.email})</span>
-                  </div>
+                  </button>
                 ))}
               </div>
             </div>
