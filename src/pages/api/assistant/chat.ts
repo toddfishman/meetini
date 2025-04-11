@@ -12,10 +12,22 @@ export const availableFunctions = {
   findParticipants: async (
     args: { names: string[] },
     req: NextApiRequest,
-    res: NextApiResponse
+    res: NextApiResponse,
+    selectedContactsParam?: any[]
   ) => {
     console.log('\n=== FIND PARTICIPANTS CALLED ===');
     console.log('Names:', JSON.stringify(args.names, null, 2));
+    
+    // If we have selected contacts passed as a parameter, use those directly
+    if (selectedContactsParam && selectedContactsParam.length > 0) {
+      console.log('Using pre-selected contacts:', selectedContactsParam);
+      const session = await getServerSession(req, res, authOptions);
+      return {
+        success: true,
+        participants: selectedContactsParam.map((c: any) => c.email),
+        organizer: session?.user?.email
+      };
+    }
 
     const session = await getServerSession(req, res, authOptions);
     if (!session?.user?.email) throw new Error('Not authenticated');
@@ -542,35 +554,72 @@ export default async function handler(
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  // Temporarily disable auth for testing
-  // const session = await getServerSession(req, res, authOptions);
-  // if (!session?.user?.email) {
-  //   return res.status(401).json({ error: 'Not authenticated' });
-  // }
-
   try {
-    const { message, threadId } = req.body;
+    // Extract all needed data from the request
+    const { message, threadId, selectedContacts } = req.body;
+    
     console.log('\n=== ASSISTANT API REQUEST ===');
     console.log('Message:', message);
     console.log('ThreadId:', threadId);
     console.log('Assistant ID:', ASSISTANT_ID);
+    console.log('Selected Contacts:', selectedContacts);
 
     if (!message) {
       return res.status(400).json({ error: 'Message is required' });
     }
 
+    // Ensure we have a session with a logged-in user
+    const session = await getServerSession(req, res, authOptions);
+    if (!session?.user?.email) {
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+
+    // Create a thread if we don't have one yet
     const thread = threadId
       ? await openai.beta.threads.retrieve(threadId)
       : await openai.beta.threads.create();
 
+    // Add the user's message to the thread
     await openai.beta.threads.messages.create(thread.id, {
       role: "user",
       content: message
     });
 
+    // Add predefined context about selected contacts, if any
+    if (selectedContacts && selectedContacts.length > 0) {
+      const contactsContextMessage = `
+The user has already selected the following contacts for this meeting:
+${selectedContacts.map((c: any) => `- ${c.name} (${c.email})`).join('\n')}
+
+Use ONLY these contacts as the participants for the meeting. Do not try to extract additional participants from the message unless explicitly mentioned by the user.
+`;
+
+      // Add the contacts context as a system message to avoid showing it to the user
+      await openai.beta.threads.messages.create(thread.id, {
+        role: "user", // Changed back to "user" to avoid TypeScript error, we'll filter it out manually
+        content: contactsContextMessage
+      });
+      
+      console.log('Added contacts context to thread:', contactsContextMessage);
+    }
+
+    // Create a run with the Assistant
     const run = await openai.beta.threads.runs.create(thread.id, {
       assistant_id: ASSISTANT_ID,
       instructions: `You are a highly intelligent scheduling assistant with deep contextual understanding and social awareness. Your goal is to make scheduling feel natural and human-like while respecting all technical constraints.
+
+${selectedContacts && selectedContacts.length > 0 ? 
+  'IMPORTANT: The user has already selected specific contacts to meet with. Use ONLY these contacts as the participants and do not try to extract additional participants from the message unless explicitly mentioned.' : 
+  'Extract participant names from the user message to determine who should be invited to the meeting.'}
+
+Current date and time: ${new Date().toString()}
+User's email: ${session.user.email}
+User's name: ${session.user.name || 'Unknown'}
+
+- If you cannot determine the meeting participants, ask the user who they want to meet with
+- If participants were already selected and provided to you, use those as the invitees
+- Always prioritize contacts that the user has explicitly selected
+- Don't suggest yourself (Meetini) as a participant
 
 CORE CAPABILITIES:
 1. Natural Language Understanding
@@ -599,60 +648,12 @@ CORE CAPABILITIES:
    - Adapt to formal/informal relationship contexts
    - Balance multiple participants' preferences
 
-ENHANCED CONTEXT UTILIZATION:
-1. Participant Context
-   - Use participantContext to understand each person's:
-     * Working hours preferences
-     * Meeting history and patterns
-     * Registration status and system familiarity
-     * Relationship to organizer
-
-2. Historical Patterns
-   - Analyze recentMeetings to identify:
-     * Preferred meeting times
-     * Common meeting durations
-     * Successful meeting patterns
-     * Scheduling conflicts to avoid
-
-3. Time Preferences
-   - Consider multiple factors:
-     * Explicit user preferences
-     * Meeting type conventions
-     * Historical successful times
-     * Cultural norms
-     * Seasonal considerations
-
-4. Smart Fallbacks
-   - When preferences conflict:
-     * Prioritize explicit over implicit preferences
-     * Consider relationship dynamics
-     * Fall back to conventional wisdom
-     * Explain reasoning in natural language
-
-COMMUNICATION STYLE:
-1. Be conversational but professional
-2. Explain decisions naturally
-3. Offer alternatives when needed
-4. Handle edge cases gracefully
-5. Maintain context across interactions
-
 STRICT RULES:
 1. Never schedule outside working hours
 2. Always respect timezone constraints
 3. Never double-book
 4. Always verify availability
-5. Maintain professional boundaries
-
-Example Interaction:
-User: "Set up coffee with Sarah next week"
-You should:
-1. Check participantContext for Sarah's preferences
-2. Analyze historical meeting patterns
-3. Consider relationship context
-4. Suggest optimal times based on all factors
-5. Explain your reasoning naturally
-
-Remember: Your goal is to feel like a knowledgeable assistant who understands both the technical constraints and human factors in scheduling.`
+5. Maintain professional boundaries`
     });
 
     let completedRun = await waitForRunCompletion(thread.id, run.id);
@@ -667,11 +668,44 @@ Remember: Your goal is to feel like a knowledgeable assistant who understands bo
 
         if (functionName in availableFunctions) {
           try {
-            const result = await availableFunctions[functionName as keyof typeof availableFunctions](args, req, res);
-            toolOutputs.push({
-              tool_call_id: toolCall.id,
-              output: JSON.stringify(result)
-            });
+            // If the function is findParticipants and we have selected contacts, use those instead
+            if (functionName === 'findParticipants' && selectedContacts && selectedContacts.length > 0) {
+              // Override the extracted names with the selected contacts
+              toolOutputs.push({
+                tool_call_id: toolCall.id,
+                output: JSON.stringify({
+                  success: true,
+                  participants: selectedContacts.map((c: any) => c.email),
+                  organizer: session.user.email
+                })
+              });
+              console.log('Using selected contacts for findParticipants function:', selectedContacts);
+            } else if (functionName === 'findAvailableTimes') {
+              // For findAvailableTimes, ensure we're using the correct participants
+              // If we have selected contacts, make sure they're included
+              if (selectedContacts && selectedContacts.length > 0) {
+                // Replace the participants in the args with our selected contacts
+                const emails = selectedContacts.map((c: any) => c.email);
+                if (!emails.includes(session.user.email)) {
+                  emails.push(session.user.email);
+                }
+                args.participants = emails;
+                console.log('Modified findAvailableTimes to use selected contacts:', emails);
+              }
+              
+              const result = await availableFunctions[functionName as keyof typeof availableFunctions](args, req, res);
+              toolOutputs.push({
+                tool_call_id: toolCall.id,
+                output: JSON.stringify(result)
+              });
+            } else {
+              // Call the function normally for other functions
+              const result = await availableFunctions[functionName as keyof typeof availableFunctions](args, req, res);
+              toolOutputs.push({
+                tool_call_id: toolCall.id,
+                output: JSON.stringify(result)
+              });
+            }
           } catch (error) {
             toolOutputs.push({
               tool_call_id: toolCall.id,
@@ -695,15 +729,30 @@ Remember: Your goal is to feel like a knowledgeable assistant who understands bo
     }
 
     const messages = await openai.beta.threads.messages.list(thread.id);
+
+    // Extract the new assistant messages that were generated in this run
+    // by comparing with the run's creation timestamp and filtering out system messages
+    const runCreationTime = new Date(run.created_at * 1000);
+    const filteredMessages = messages.data.filter(msg => 
+      // Only include assistant messages or user messages that aren't the internal context message
+      (msg.role === 'assistant' || 
+       (msg.role === 'user' && !msg.content.some(c => 
+         typeof c === 'object' && 
+         c.type === 'text' && 
+         c.text.value.includes('already selected the following contacts')
+       )))
+    );
+
     return res.status(200).json({
       threadId: thread.id,
-      messages: messages.data,
+      messages: filteredMessages,
       debug: {
         runId: run.id,
         status: completedRun.status
       }
     });
   } catch (error) {
+    console.error('Error in assistant chat:', error);
     return res.status(500).json({
       error: 'Failed to process chat',
       details: error instanceof Error ? error.message : undefined
