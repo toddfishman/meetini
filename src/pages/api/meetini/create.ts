@@ -94,7 +94,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // In the existing code, after checking invite.suggestedTimes?.length 
     // Check which participants are registered Meetini users
     const registeredUsers = await prisma.user.findMany({
       where: {
@@ -102,10 +101,44 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           in: invite.participants.map(p => p.email)
         }
       },
-      select: { email: true }
+      include: {
+        calendarAccounts: {
+          where: {
+            provider: 'google'
+          }
+        }
+      }
     });
 
     const registeredEmails = new Set(registeredUsers.map(u => u.email));
+    
+    // Log detailed information about participants
+    console.log(`PARTICIPANT ANALYSIS:`);
+    console.log(`Total participants: ${invite.participants.length}`);
+    console.log(`Registered users: ${registeredUsers.length}`);
+    
+    // Identify registered users with calendar accounts
+    const usersWithCalendar = registeredUsers.filter(u => 
+      u.calendarAccounts && u.calendarAccounts.length > 0
+    );
+    
+    if (usersWithCalendar.length > 0) {
+      console.log(`✅ Found ${usersWithCalendar.length} registered users with calendar accounts:`);
+      usersWithCalendar.forEach(user => {
+        console.log(`- ${user.email}: ${user.calendarAccounts.length} account(s)`);
+      });
+    } else {
+      console.log(`⚠️ No registered users have calendar accounts`);
+    }
+    
+    // Identify test emails
+    const testEmails = invite.participants
+      .filter(p => p.email.includes('arrowfish.com'))
+      .map(p => p.email);
+    
+    if (testEmails.length > 0) {
+      console.log(`🧪 TEST EMAILS: ${testEmails.join(', ')}`);
+    }
 
     // Check if all participants are registered users with calendar access
     const allParticipantsRegistered = invite.participants.every(p => 
@@ -116,29 +149,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let event: any = null;
     let calendarEventCreated = false;
 
-    if (allParticipantsRegistered) {
-      // If all participants are registered, proceed with calendar event creation
-      try {
-        event = await calendarService.createEvent({
-          summary: eventTitle,
-          description: invite.description || `Scheduled via Meetini\n\nOriginal prompt: ${invite.type}`,
-          attendees: invite.participants.map((p: MeetiniParticipant) => ({ email: p.email })),
-          startTime: invite.suggestedTimes[0],
-          duration: 30,
-          virtual: true
-        });
+    // Even if not all participants are registered, we want to create the calendar event
+    // for the organizer and all registered users, then send invites to unregistered users
+    try {
+      // Create a calendar event regardless of if all users are registered
+      // All registered users will receive the calendar invite directly
+      // Unregistered users will receive an email invitation
+      
+      // All email addresses that should receive the Google Calendar invite:
+      // 1. All registered users (they granted access to their calendars)
+      // 2. Test emails (special handling)
+      const calendarAttendees = invite.participants
+        .filter(p => registeredEmails.has(p.email) || p.email.includes('arrowfish.com'))
+        .map((p: MeetiniParticipant) => ({ email: p.email }));
+      
+      console.log(`Creating calendar event with ${calendarAttendees.length} attendees with calendar access:`);
+      console.log(`- Calendar attendees: ${calendarAttendees.map(a => a.email).join(', ')}`);
+      
+      event = await calendarService.createEvent({
+        summary: eventTitle,
+        description: invite.description || `Scheduled via Meetini\n\nOriginal prompt: ${invite.type}`,
+        attendees: calendarAttendees,
+        startTime: invite.suggestedTimes[0],
+        duration: 30,
+        virtual: true
+      });
 
-        if (!event.id || !event.start?.dateTime) {
-          throw new Error('Failed to create calendar event with valid start time');
-        }
-        calendarEventCreated = true;
-      } catch (error) {
-        console.error('Failed to create calendar event:', error);
-        throw error;
+      if (!event.id || !event.start?.dateTime) {
+        throw new Error('Failed to create calendar event with valid start time');
       }
-    } else {
-      console.log('Not all participants are registered. Skipping calendar event creation until confirmation.');
-      // We'll create a "tentative" meetini without a calendar event
+      calendarEventCreated = true;
+      console.log(`Successfully created calendar event with ID: ${event.id}`);
+      console.log(`Event attendees: ${JSON.stringify(event.attendees || [])}`);
+    } catch (error) {
+      console.error('Failed to create calendar event:', error);
+      // Continue without calendar event - we'll store the invitation in our database
+      console.log('Proceeding without Google Calendar event. Will use Meetini invitation only.');
     }
 
     // Save invite to database with proper proposedTimes

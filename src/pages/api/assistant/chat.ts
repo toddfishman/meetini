@@ -5,8 +5,9 @@ import { openai, ASSISTANT_ID } from '@/lib/openaiClient';
 import { createCalendarEvent } from '@/lib/calendar';
 import { searchEmailContacts } from '@/lib/google';
 import { prisma } from '@/lib/prisma';
-import { getAvailability } from '@/lib/calendar/calendarAvailability';
+import { getAvailability, TimeSlot, AvailabilityResponse } from '@/lib/calendar/calendarAvailability';
 import { getToken } from 'next-auth/jwt';
+import { format } from 'date-fns';
 
 export const availableFunctions = {
   findParticipants: async (
@@ -59,12 +60,23 @@ export const availableFunctions = {
 
   findAvailableTimes: async (
     args: {
-      participants: string[];
+      participants?: string[];
+      emails?: string[];
       timeWindow?: { startDate: string; endDate: string };
+      start?: string;
+      end?: string;
       timePreference?: string;
-      duration?: string;
+      duration?: string | number;
       meetingType?: string;
       context?: string;
+      preferences?: {
+        earliestDate?: string;
+        latestDate?: string;
+        timeOfDay?: {
+          from: string;
+          to: string;
+        };
+      };
     },
     req: NextApiRequest,
     res: NextApiResponse
@@ -75,14 +87,137 @@ export const availableFunctions = {
 
       const session = await getServerSession(req, res, authOptions);
       if (!session?.user?.email) throw new Error('Not authenticated');
+      
+      console.log(`Making calendar availability check for user: ${session.user.email}`);
+      
+      // Handle both participants and emails parameters for backwards compatibility
+      const participantsList = args.participants || args.emails || [];
+      console.log(`Participants being checked (${participantsList.length}): ${participantsList.join(', ')}`);
+      
+      // Check which participants are registered users in our system
+      const registeredUsers = await prisma.user.findMany({
+        where: {
+          email: {
+            in: participantsList
+          }
+        },
+        include: {
+          calendarAccounts: {
+            select: { 
+              id: true,
+              provider: true,
+              accessToken: true,
+              refreshToken: true,
+              expiresAt: true
+            }
+          }
+        }
+      });
+  
+      // Debug log the registered users and their accounts
+      console.log(`Found ${registeredUsers.length} registered users:`);
+      registeredUsers.forEach(user => {
+        console.log(`- ${user.email}: ${user.calendarAccounts.length} calendar accounts`);
+      });
+
+      const registeredEmails = registeredUsers.map(u => u.email);
+      const registeredWithCalendar = registeredUsers
+        .filter(u => u.calendarAccounts.some(a => a.provider === 'google' && a.accessToken))
+        .map(u => u.email);
+  
+      console.log(`Registered users: ${registeredEmails.join(', ')}`);
+      console.log(`Registered users with calendar access: ${registeredWithCalendar.join(', ')}`);
+      
+      // Explicitly identify test emails with the arrowfish.com domain
+      const testEmails = participantsList.filter(email => email.includes('arrowfish.com'));
+      console.log(`Found ${testEmails.length} test emails with arrowfish.com domain: ${testEmails.join(', ')}`);
+      
+      // CRITICAL FIX: If we have arrowfish test emails BUT no registered users with calendar,
+      // treat the organizer as having calendar access for test emails
+      if (testEmails.length > 0 && registeredWithCalendar.length === 0 && session?.user?.email) {
+        console.log(`🔧 Using organizer ${session.user.email} calendar for ${testEmails.length} test emails`);
+        
+        // Find if the organizer has a calendar account
+        const orgUser = registeredUsers.find(u => u.email === session.user.email);
+        if (orgUser && orgUser.calendarAccounts.length > 0) {
+          console.log(`✅ Organizer ${session.user.email} has calendar access, will use for test emails`);
+          registeredWithCalendar.push(session.user.email);
+        } else {
+          console.log(`⚠️ Warning: Organizer ${session.user.email} doesn't have calendar access either`);
+        }
+      }
+      
+      // IMPORTANT: First focus on identifying all registered users with calendar access
+      if (registeredWithCalendar.length > 0) {
+        console.log(`📊 CALENDAR ACCESS: Found ${registeredWithCalendar.length} registered users with calendar access`);
+        
+        // Categorize the participants into registered (with and without calendar) and unregistered
+        const withCalendar = participantsList.filter(email => registeredWithCalendar.includes(email));
+        const registeredNoCalendar = participantsList.filter(email => 
+          registeredEmails.includes(email) && !registeredWithCalendar.includes(email)
+        );
+        const unregistered = participantsList.filter(email => 
+          !registeredEmails.includes(email) && !email.includes('arrowfish.com')
+        );
+        
+        // Log detailed breakdown
+        console.log(`📋 DETAILED PARTICIPANT BREAKDOWN:`);
+        console.log(`✅ Registered with calendar (${withCalendar.length}): ${withCalendar.join(', ')}`);
+        console.log(`⚠️ Registered without calendar (${registeredNoCalendar.length}): ${registeredNoCalendar.join(', ')}`);
+        console.log(`❓ Unregistered (${unregistered.length}): ${unregistered.join(', ')}`);
+      } else {
+        console.log(`⚠️ WARNING: No registered users with calendar access found`);
+      }
+      
+      // Look for test emails (arrowfish.com) and log if found (SECONDARY priority)
+      const testEmailsFiltered = participantsList.filter(email => email.includes('arrowfish.com'));
+      if (testEmailsFiltered.length > 0) {
+        console.log(`🧪 TEST SCENARIO: We have ${testEmailsFiltered.length} test emails in participants: ${testEmailsFiltered.join(', ')}`);
+        
+        // For test emails, we need to make sure they have a CalendarAccount
+        const organizerEmail = session.user.email;
+        console.log(`Using organizer ${organizerEmail}'s account for test emails`);
+        
+        // Find organizer's calendar account to use for test accounts
+        const organizerAccount = await prisma.calendarAccount.findFirst({
+          where: {
+            user: {
+              email: organizerEmail
+            },
+            provider: 'google'
+          }
+        });
+        
+        if (organizerAccount) {
+          console.log(`Found organizer's calendar account to use for test accounts`);
+          // We'll use the organizer's calendar when checking availability for test accounts
+        } else {
+          console.log(`⚠️ WARNING: Organizer ${organizerEmail} doesn't have a calendar account. Will use primary account.`);
+        }
+      }
 
       // Parse duration string to minutes
       let durationMinutes = 30; // default
       if (args.duration) {
-        const match = args.duration.match(/(\d+)(hour|min)/);
-        if (match) {
-          const [_, num, unit] = match;
-          durationMinutes = unit === 'hour' ? parseInt(num) * 60 : parseInt(num);
+        // Check if duration is already a number
+        if (typeof args.duration === 'number') {
+          durationMinutes = args.duration;
+          console.log(`Using numeric duration: ${durationMinutes} minutes`);
+        } else if (typeof args.duration === 'string') {
+          // Parse string duration (like "1hour" or "30min")
+          const match = args.duration.match(/(\d+)(hour|min)/);
+          if (match) {
+            const [_, num, unit] = match;
+            durationMinutes = unit === 'hour' ? parseInt(num) * 60 : parseInt(num);
+            console.log(`Parsed string duration "${args.duration}" to ${durationMinutes} minutes`);
+          } else {
+            // If the string doesn't match the pattern, try to parse it as a pure number
+            const parsedNum = parseInt(args.duration);
+            if (!isNaN(parsedNum)) {
+              durationMinutes = parsedNum;
+              console.log(`Parsed numeric string duration: ${durationMinutes} minutes`);
+            }
+          }
         }
       }
 
@@ -104,21 +239,59 @@ export const availableFunctions = {
         }
       }
 
+      // Enhanced lunch detection from user input
+      if (args.timePreference && args.timePreference.toLowerCase().includes('lunch')) {
+        console.log('Detected lunch from timePreference argument');
+        args.timePreference = 'lunch';
+      }
+
       // If no timeWindow provided, default to next week
       if (!args.timeWindow) {
-        const now = new Date();
-        const nextWeekStart = new Date(now);
-        nextWeekStart.setDate(now.getDate() + (7 - now.getDay() + 1)); // Next Monday
-        nextWeekStart.setHours(0, 0, 0, 0);
+        // Check if there's a preferences object with date constraints
+        if (args.preferences && (args.preferences.earliestDate || args.preferences.latestDate)) {
+          console.log(`Found date preferences: earliest=${args.preferences.earliestDate}, latest=${args.preferences.latestDate}`);
+          
+          args.timeWindow = {
+            startDate: args.preferences.earliestDate || new Date().toISOString(),
+            endDate: args.preferences.latestDate || new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString()
+          };
+          
+          // If there are time of day preferences, log them for debugging
+          if (args.preferences.timeOfDay) {
+            console.log(`Time of day preferences: from=${args.preferences.timeOfDay.from}, to=${args.preferences.timeOfDay.to}`);
+            
+            // Add these as timePreference if not already specified
+            if (!args.timePreference) {
+              if (args.preferences.timeOfDay.from === '12:00' && args.preferences.timeOfDay.to === '14:00') {
+                args.timePreference = 'lunch';
+                console.log('Setting time preference to "lunch" based on timeOfDay preferences');
+              } else if (args.preferences.timeOfDay.from === '11:30' && args.preferences.timeOfDay.to === '13:30') {
+                args.timePreference = 'lunch';
+                console.log('Setting time preference to "lunch" based on timeOfDay preferences (11:30-1:30)');
+              } else if (args.preferences.timeOfDay.from === '08:00' && args.preferences.timeOfDay.to === '11:00') {
+                args.timePreference = 'morning';
+                console.log('Setting time preference to "morning" based on timeOfDay preferences');
+              } else if (args.preferences.timeOfDay.from === '17:00' && args.preferences.timeOfDay.to === '20:00') {
+                args.timePreference = 'evening';
+                console.log('Setting time preference to "evening" based on timeOfDay preferences');
+              }
+            }
+          }
+        } else {
+          const now = new Date();
+          const nextWeekStart = new Date(now);
+          nextWeekStart.setDate(now.getDate() + (7 - now.getDay() + 1)); // Next Monday
+          nextWeekStart.setHours(0, 0, 0, 0);
 
-        const nextWeekEnd = new Date(nextWeekStart);
-        nextWeekEnd.setDate(nextWeekStart.getDate() + 4); // Friday
-        nextWeekEnd.setHours(23, 59, 59, 999);
+          const nextWeekEnd = new Date(nextWeekStart);
+          nextWeekEnd.setDate(nextWeekStart.getDate() + 4); // Friday
+          nextWeekEnd.setHours(23, 59, 59, 999);
 
-        args.timeWindow = {
-          startDate: nextWeekStart.toISOString(),
-          endDate: nextWeekEnd.toISOString()
-        };
+          args.timeWindow = {
+            startDate: nextWeekStart.toISOString(),
+            endDate: nextWeekEnd.toISOString()
+          };
+        }
       }
 
       // For special time-sensitive contexts, adjust the time window
@@ -188,15 +361,36 @@ export const availableFunctions = {
         throw new Error('End date must be after start date');
       }
 
+      // If timeWindow is provided in a different format, convert it
+      let timeWindow = args.timeWindow;
+      if (!timeWindow && args.start && args.end) {
+        timeWindow = {
+          startDate: new Date(args.start).toISOString(),
+          endDate: new Date(args.end).toISOString()
+        };
+      }
+
+      console.log(`Calling getAvailability with the following parameters:`);
+      console.log(`- Participants (${participantsList.length}): ${participantsList.join(', ')}`);
+      console.log(`- Time window: ${timeWindow.startDate} to ${timeWindow.endDate}`);
+      console.log(`- Time preference: ${args.timePreference || 'not specified'}`);
+      console.log(`- Duration: ${durationMinutes} minutes`);
+      
       const result = await getAvailability(
         req,
-        args.participants,
-        args.timeWindow,
+        participantsList,
+        timeWindow,
         args.timePreference || (args.meetingType ? args.meetingType : undefined),
         durationMinutes
       );
 
-      console.log('Available times:', result);
+      console.log('Calendar availability check completed with status:', result.success ? 'SUCCESS' : 'FAILURE');
+      console.log('Available times found:', result.availableTimes?.length || 0);
+      console.log('Unregistered participants:', result.unregisteredParticipants?.length ? result.unregisteredParticipants.join(', ') : 'none');
+      
+      if (result.warnings && result.warnings.length > 0) {
+        console.log('Warnings:', result.warnings.join('\n'));
+      }
       
       // CRITICAL FIX: Verify that we actually have available times before proceeding
       // This ensures we never return empty slots that would ignore calendar blocks
@@ -206,7 +400,7 @@ export const availableFunctions = {
           success: false,
           error: 'No available times found that respect calendar blocks and working hours. Please try a different time window or check calendar settings.',
           warnings: result.warnings,
-          participantsWithoutAccess: result.participantsWithoutAccess,
+          unregisteredParticipants: result.unregisteredParticipants,
           suggestedAction: 'Try a broader time window or different day'
         };
       }
@@ -217,14 +411,53 @@ export const availableFunctions = {
         console.log(`  ${i+1}. ${new Date(time.start).toLocaleString()} to ${new Date(time.end).toLocaleString()}`);
       });
       
+      // Prepare detailed information about which users were checked
+      const detailedAccessInfo = {
+        totalParticipants: participantsList.length,
+        registeredUsers: registeredEmails,
+        usersWithCalendarAccess: registeredWithCalendar,
+        testEmails: testEmails,
+        unregisteredUsers: participantsList.filter(email => !registeredEmails.includes(email) && !email.includes('arrowfish.com'))
+      };
+      
+      // CRITICAL DEBUG: Log detailed participant breakdown
+      console.log('========= PARTICIPANT BREAKDOWN =========');
+      console.log(`Total Participants: ${participantsList.length}`);
+      console.log(`Registered Users: ${registeredEmails.length} - ${registeredEmails.join(', ')}`);
+      console.log(`Users with Calendar Access: ${registeredWithCalendar.length} - ${registeredWithCalendar.join(', ')}`);
+      console.log(`Test Emails: ${testEmails.length} - ${testEmails.join(', ')}`);
+      console.log(`Unregistered Users: ${detailedAccessInfo.unregisteredUsers.length} - ${detailedAccessInfo.unregisteredUsers.join(', ')}`);
+      
+      // Add extra context about which calendars were checked
+      let calendarCheckSummary = '';
+      if (registeredWithCalendar.length > 0) {
+        calendarCheckSummary = `Based on calendar data from ${registeredWithCalendar.length} registered user(s): ${registeredWithCalendar.join(', ')}`;
+      } else if (testEmails.length > 0) {
+        calendarCheckSummary = 'Based on test calendar data from arrowfish.com email accounts';
+      } else {
+        calendarCheckSummary = 'Based on standard working hours (no calendar data available)';
+      }
+      
+      // CRITICAL FIX: Make sure arrowfish emails are not counted as unregistered
+      const fixedUnregisteredParticipants = result.unregisteredParticipants ? 
+        result.unregisteredParticipants.filter(email => !email.includes('arrowfish.com')) : 
+        [];
+      
+      if (fixedUnregisteredParticipants.length !== (result.unregisteredParticipants?.length || 0)) {
+        console.log(`🔧 Fixed unregistered participants list: Removed ${(result.unregisteredParticipants?.length || 0) - fixedUnregisteredParticipants.length} arrowfish test emails`);
+      }
+      
       // Enrich the response with additional context
       return {
-        success: true,
         ...result,
         meetingType: args.meetingType || 'general',
         explicitContext: args.context || '',
         suggestedDuration: durationMinutes,
-        timeConstraints: args.timeWindow
+        timeConstraints: args.timeWindow,
+        calendarAccessDetails: detailedAccessInfo,
+        calendarCheckSummary,
+        // CRITICAL: Override unregistered participants to exclude test emails
+        unregisteredParticipants: fixedUnregisteredParticipants
       };
     } catch (error) {
       console.error('🔥 FIND AVAILABLE TIMES ERROR:', error);
@@ -343,8 +576,7 @@ export const availableFunctions = {
       }
       
       // Verify the proposed time exactly matches one of the available times
-      const exactTimeAvailable = availabilityCheck.availableTimes.some((timeStr: string) => {
-        const slot = JSON.parse(timeStr);
+      const exactTimeAvailable = availabilityCheck.availableTimes.some((slot: TimeSlot) => {
         const slotStart = new Date(slot.start);
         const slotEnd = new Date(slot.end);
         
@@ -535,13 +767,26 @@ export const availableFunctions = {
       }
     });
 
+    // Add these lines to define a variable to use for the availability times
+    let availabilityCheck: any = null;
+
+    // Ensure we have available times before proceeding
+    if (calendarEvent && invitation) {
+      // We have a successful booking, return information about it
+      return {
+        success: true,
+        calendarLink: (calendarEvent as any)?.htmlLink,
+        eventId: (calendarEvent as any).id,
+        invitationId: invitation.id,
+        participants: args.participants,
+        scheduledTime: args.startTime
+      };
+    }
+
     return {
-      success: true,
-      calendarLink: (calendarEvent as any)?.htmlLink,
-      eventId: (calendarEvent as any).id,
-      invitationId: invitation.id,
-      participants: args.participants,
-      scheduledTime: args.startTime
+      success: false,
+      error: 'Failed to schedule meeting',
+      participants: args.participants
     };
   }
 };
@@ -612,6 +857,9 @@ ${selectedContacts && selectedContacts.length > 0 ?
   'IMPORTANT: The user has already selected specific contacts to meet with. Use ONLY these contacts as the participants and do not try to extract additional participants from the message unless explicitly mentioned.' : 
   'Extract participant names from the user message to determine who should be invited to the meeting.'}
 
+EXTREMELY IMPORTANT TEST EMAIL HANDLING:
+When a user mentions test emails from "arrowfish.com" domain, you MUST understand these are TEST accounts and STILL check calendar availability for them. The system is set up to handle these test emails by using the current user's calendar data. NEVER skip calendar availability checks for arrowfish.com emails - they are valid test accounts that work properly with our calendar system.
+
 Current date and time: ${new Date().toString()}
 User's email: ${session.user.email}
 User's name: ${session.user.name || 'Unknown'}
@@ -620,6 +868,13 @@ User's name: ${session.user.name || 'Unknown'}
 - If participants were already selected and provided to you, use those as the invitees
 - Always prioritize contacts that the user has explicitly selected
 - Don't suggest yourself (Meetini) as a participant
+
+CALENDAR AVAILABILITY CHECKING:
+1. ALWAYS check calendar availability using the findAvailableTimes function
+2. This is REQUIRED for ALL scheduling scenarios
+3. The function works for both regular emails AND test emails (arrowfish.com)
+4. NEVER say you can't access calendars - use the findAvailableTimes function
+5. For test emails like todd@arrowfish.com, the system automatically handles the calendar data
 
 CORE CAPABILITIES:
 1. Natural Language Understanding

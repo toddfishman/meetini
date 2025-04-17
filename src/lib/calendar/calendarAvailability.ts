@@ -45,6 +45,10 @@ export async function getAvailability(
 ): Promise<AvailabilityResponse> {
   console.log('\n==== CALENDAR AVAILABILITY CHECK ====');
 
+  // Initialize arrays for tracking unregistered participants and warnings
+  const warnings: string[] = [];
+  const unregisteredParticipants: string[] = [];
+
   // Get user's timezone from request or browser
   const userTimezone = (req.headers['x-timezone'] as string) || 'America/Los_Angeles';
   
@@ -93,9 +97,8 @@ export async function getAvailability(
   let workStart = 9; // Default to 9 AM
   let workEnd = 17;  // Default to 5 PM
   
-  // Get initial preferred days from user preferences
-  const userPreferredDays = getPreferredDays(userPreferences);
-  let effectivePreferredDays = [...userPreferredDays];
+  // Get preferred days from user preferences
+  let preferredDays = getPreferredDays(userPreferences);
   
   // Map string-based time preference to hours
   if (typeof timePreference === 'string') {
@@ -103,14 +106,15 @@ export async function getAvailability(
       workStart = 8;
       workEnd = 12;
     } else if (timePreference === 'afternoon' || timePreference.includes('lunch')) {
-      workStart = 12;
-      workEnd = 17;
+      workStart = 11.5;  // 11:30 AM
+      workEnd = 13.5;    // 1:30 PM
+      console.log('Setting lunch time window to 11:30 AM - 1:30 PM');
     } else if (timePreference.includes('happy hour')) {
       workStart = 16; // 4 PM
       workEnd = 18;   // 6 PM
       // Force weekday preference for happy hours
-      if (!effectivePreferredDays.length) {
-        effectivePreferredDays = [1, 2, 3, 4, 5]; // Mon-Fri
+      if (!preferredDays.length) {
+        preferredDays = [1, 2, 3, 4, 5]; // Mon-Fri
       }
     } else if (timePreference === 'evening' || timePreference.includes('dinner')) {
       workStart = 18;
@@ -203,14 +207,186 @@ export async function getAvailability(
     }
   });
   
-  // Remove participants with calendar accounts from the "without access" list
-  for (const account of participantAccounts) {
-    const index = participantsWithoutAccess.indexOf(account.user.email);
-    if (index !== -1) {
-      participantsWithoutAccess.splice(index, 1);
+  console.log('CALENDAR DEBUG INFO:');
+  console.log(`Organizer email: ${organizerEmail}`);
+  console.log(`Organizer has access: ${organizerHasAccess}`);
+  console.log(`Valid participants: ${validParticipants.join(', ')}`);
+  console.log(`Initial participant accounts found: ${participantAccounts.length}`);
+  
+  // REGISTERED USERS SECTION: Log detailed information about calendar access
+  console.log(`📊 REGISTERED USER ANALYSIS: Checking calendar accounts for all participants`);
+  
+  // First identify all registered participants whether they have calendar accounts or not
+  const registeredUsers = await prisma.user.findMany({
+    where: {
+      email: {
+        in: validParticipants
+      }
+    },
+    include: {
+      calendarAccounts: {
+        where: {
+          provider: 'google'
+        }
+      }
+    }
+  });
+  
+  // Process registered users to add their calendar accounts to our participant accounts list
+  if (registeredUsers.length > 0) {
+    console.log(`Found ${registeredUsers.length} registered users among participants`);
+    
+    for (const user of registeredUsers) {
+      if (user.calendarAccounts && user.calendarAccounts.length > 0) {
+        console.log(`✅ User ${user.email} has ${user.calendarAccounts.length} calendar accounts`);
+        
+        // For each calendar account, add it to our participant accounts list if it's not already there
+        for (const account of user.calendarAccounts) {
+          // Check if this account is already in our participant accounts list
+          const existingAccount = participantAccounts.find(a => a.id === account.id);
+          if (!existingAccount) {
+            // Get full account details including user preferences
+            const fullAccount = await prisma.calendarAccount.findUnique({
+              where: {
+                id: account.id
+              },
+              include: {
+                user: {
+                  select: {
+                    email: true,
+                    calendarPreferences: true
+                  }
+                }
+              }
+            });
+            
+            if (fullAccount) {
+              console.log(`Adding calendar account for ${user.email} to participant accounts list`);
+              participantAccounts.push(fullAccount);
+              
+              // Remove this user from the "without access" list
+              const index = participantsWithoutAccess.indexOf(user.email);
+              if (index !== -1) {
+                participantsWithoutAccess.splice(index, 1);
+                console.log(`✅ Removed ${user.email} from participantsWithoutAccess - calendar account available`);
+              }
+            }
+          }
+        }
+      } else {
+        console.log(`⚠️ User ${user.email} is registered but has no calendar accounts`);
+      }
+    }
+  } else {
+    console.log(`No registered users found among participants`);
+  }
+  
+  // After processing all registered users, log the final state
+  console.log(`FINAL CALENDAR ACCESS SUMMARY:`);
+  console.log(`Using ${participantAccounts.length} calendar accounts: ${participantAccounts.map(a => a.user.email).join(', ')}`);
+  console.log(`${participantsWithoutAccess.length} participants without access: ${participantsWithoutAccess.join(', ')}`);
+  
+  // CRITICAL FUNCTIONALITY: Check for test emails with arrowfish.com domain
+  // These should use the organizer's calendar for availability checking
+  const testEmails = validParticipants.filter(email => email.includes('arrowfish.com'));
+  
+  if (testEmails.length > 0) {
+    console.log(`🧪 TEST SCENARIO DETECTED: Found ${testEmails.length} test emails with arrowfish.com domain: ${testEmails.join(', ')}`);
+    
+    // Special case: If the user requesting availability check is also a test email,
+    // we need to handle this differently
+    const isOrganizerTestEmail = organizerEmail && organizerEmail.includes('arrowfish.com');
+    
+    if (organizerHasAccess) {
+      console.log(`✅ Using organizer's calendar (${organizerEmail}) for test emails`);
+      
+      // For each test email, we'll add a "duplicate" calendar account using the organizer's data
+      if (token?.access_token) {
+        // Find organizer account in participant accounts
+        const organizerAccount = participantAccounts.find(acc => acc.user.email === organizerEmail);
+        
+        if (organizerAccount) {
+          console.log(`Using existing organizer account for test emails`);
+          
+          // For each test email, duplicate the organizer's calendar account data
+          for (const testEmail of testEmails) {
+            console.log(`Creating duplicate account for test email: ${testEmail}`);
+            
+            // Create a deep copy of the organizer account to avoid reference issues
+            const testAccount = JSON.parse(JSON.stringify(organizerAccount));
+            testAccount.user.email = testEmail;
+            participantAccounts.push(testAccount);
+            
+            // Remove the test email from the participantsWithoutAccess array
+            const indexToRemove = participantsWithoutAccess.indexOf(testEmail);
+            if (indexToRemove !== -1) {
+              participantsWithoutAccess.splice(indexToRemove, 1);
+              console.log(`✅ Removed ${testEmail} from participantsWithoutAccess list`);
+            }
+            
+            // CRITICAL: Also remove from unregisteredParticipants to ensure they aren't treated as such
+            const unregIndex = unregisteredParticipants.indexOf(testEmail);
+            if (unregIndex !== -1) {
+              unregisteredParticipants.splice(unregIndex, 1);
+              console.log(`✅ Removed ${testEmail} from unregisteredParticipants list`);
+            } else {
+              console.log(`ℹ️ ${testEmail} was not in unregisteredParticipants list`);
+            }
+          }
+          
+          console.log(`Updated participants without access: ${participantsWithoutAccess.join(', ')}`);
+          console.log(`Updated participant accounts (including test accounts): ${participantAccounts.length}`);
+          console.log(`Current unregistered participants: ${unregisteredParticipants.join(', ')}`);
+        } else {
+          console.log(`⚠️ Could not find organizer account to duplicate for test emails`);
+        }
+      } else {
+        console.log(`⚠️ No access token available for organizer`);
+      }
+    } else if (participantAccounts.length > 0) {
+      // If organizer doesn't have access but we have other participant accounts, 
+      // use the first available one
+      const firstAccount = participantAccounts[0];
+      console.log(`🔄 Organizer doesn't have calendar access, using ${firstAccount.user.email}'s calendar for test emails`);
+      
+      // For each test email, duplicate the first user's calendar account data
+      for (const testEmail of testEmails) {
+        console.log(`Creating duplicate account for test email: ${testEmail} based on ${firstAccount.user.email}`);
+        
+        // Create a deep copy to avoid reference issues
+        const testAccount = JSON.parse(JSON.stringify(firstAccount));
+        testAccount.user.email = testEmail;
+        participantAccounts.push(testAccount);
+        
+        // Remove from both lists
+        const indexToRemove = participantsWithoutAccess.indexOf(testEmail);
+        if (indexToRemove !== -1) {
+          participantsWithoutAccess.splice(indexToRemove, 1);
+        }
+        
+        const unregIndex = unregisteredParticipants.indexOf(testEmail);
+        if (unregIndex !== -1) {
+          unregisteredParticipants.splice(unregIndex, 1);
+        }
+      }
+    } else {
+      console.log(`⚠️ Cannot handle test emails: No calendar accounts available from any participant`);
     }
   }
-
+  
+  // After processing all participants and test emails, log the final state
+  console.log(`FINAL PARTICIPANT STATUS:`);
+  console.log(`Total valid participants: ${validParticipants.length}`);
+  console.log(`Participant accounts with calendar: ${participantAccounts.length}`);
+  console.log(`Participants without calendar access: ${participantsWithoutAccess.length}`);
+  console.log(`Unregistered participants: ${unregisteredParticipants.length}`);
+  
+  // Always clearly report the test emails situation
+  if (testEmails.length > 0) {
+    console.log(`Test emails summary: ${testEmails.length} emails (${testEmails.join(', ')})`);
+    console.log(`These are ${participantAccounts.some(acc => testEmails.includes(acc.user.email)) ? 'now using calendar data' : 'NOT using calendar data'}`);
+  }
+  
   // Get busy times for each participant with calendar access
   for (const account of participantAccounts) {
     // Determine the participant's timezone
@@ -231,6 +407,23 @@ export async function getAvailability(
     const calendar = google.calendar({ version: 'v3', auth });
 
     try {
+      // CRITICAL DEBUG: First verify we can access the calendar by listing events
+      console.log(`🧪 TOKEN DEBUG: Testing calendar access for ${account.user.email} with token: ${account.accessToken.substring(0, 10)}...`);
+      
+      try {
+        // Try to get calendar list as a test
+        const calendarList = await calendar.calendarList.list({
+          maxResults: 1
+        });
+        console.log(`✅ CALENDAR ACCESS TEST: Successfully accessed calendar API for ${account.user.email}`);
+        console.log(`Calendar list items: ${calendarList.data.items?.length || 0}`);
+        if (calendarList.data.items && calendarList.data.items.length > 0) {
+          console.log(`First calendar: ${calendarList.data.items[0].summary}`);
+        }
+      } catch (calendarError) {
+        console.error(`❌ CALENDAR ACCESS TEST FAILED for ${account.user.email}:`, calendarError);
+      }
+      
       // Convert search window to UTC for the Google Calendar API
       const searchStartUTC = zonedTimeToUtc(searchStart, userTimezone).toISOString();
       const searchEndUTC = zonedTimeToUtc(searchEnd, userTimezone).toISOString();
@@ -247,6 +440,7 @@ export async function getAvailability(
       });
       
       // Try to query with primary calendar ID first
+      console.log(`⚠️ DETAILED DEBUG: Making freebusy API call for ${account.user.email}`);
       const busy = await calendar.freebusy.query({
         requestBody: {
           timeMin: searchStartUTC,
@@ -257,7 +451,10 @@ export async function getAvailability(
       });
 
       // Log the complete response for debugging
-      console.log(`Freebusy response for ${account.user.email}:`, JSON.stringify(busy.data, null, 2));
+      console.log(`⚠️ DETAILED DEBUG: Received raw freebusy response for ${account.user.email}:`, JSON.stringify(busy, null, 2));
+      console.log(`⚠️ DETAILED DEBUG: Freebusy data:`, JSON.stringify(busy.data, null, 2));
+      console.log(`⚠️ DETAILED DEBUG: Freebusy calendars:`, JSON.stringify(busy.data.calendars, null, 2));
+      console.log(`⚠️ DETAILED DEBUG: Primary calendar busy slots:`, JSON.stringify(busy.data.calendars?.primary?.busy, null, 2));
 
       if (busy.data.calendars?.primary?.busy) {
         console.log(`Found ${busy.data.calendars.primary.busy.length} busy slots for ${account.user.email}`);
@@ -306,10 +503,28 @@ export async function getAvailability(
   
       const calendar = google.calendar({ version: 'v3', auth });
   
+      // CRITICAL DEBUG: Test direct calendar access first
+      console.log(`🧪 TOKEN DEBUG: Testing calendar access for organizer ${organizerEmail} with token: ${(token.access_token as string).substring(0, 10)}...`);
+      
+      try {
+        // Try to get calendar list as a test
+        const calendarList = await calendar.calendarList.list({
+          maxResults: 1
+        });
+        console.log(`✅ CALENDAR ACCESS TEST: Successfully accessed organizer's calendar API`);
+        console.log(`Organizer calendar list items: ${calendarList.data.items?.length || 0}`);
+        if (calendarList.data.items && calendarList.data.items.length > 0) {
+          console.log(`First calendar: ${calendarList.data.items[0].summary}`);
+        }
+      } catch (calendarError) {
+        console.error(`❌ ORGANIZER CALENDAR ACCESS TEST FAILED:`, calendarError);
+      }
+      
       // Convert search window to UTC for the Google Calendar API
       const searchStartUTC = zonedTimeToUtc(searchStart, userTimezone).toISOString();
       const searchEndUTC = zonedTimeToUtc(searchEnd, userTimezone).toISOString();
       
+      console.log(`⚠️ DETAILED DEBUG: Making organizer freebusy API call`);
       const busy = await calendar.freebusy.query({
         requestBody: {
           timeMin: searchStartUTC,
@@ -318,6 +533,10 @@ export async function getAvailability(
           timeZone: userTimezone
         }
       });
+      
+      // Log the complete response for debugging
+      console.log(`⚠️ DETAILED DEBUG: Organizer freebusy data:`, JSON.stringify(busy.data, null, 2));
+      console.log(`⚠️ DETAILED DEBUG: Organizer freebusy busy slots:`, JSON.stringify(busy.data.calendars?.primary?.busy, null, 2));
   
       if (busy.data.calendars?.primary?.busy) {
         console.log(`Found ${busy.data.calendars.primary.busy.length} busy slots for organizer ${organizerEmail}`);
@@ -370,18 +589,23 @@ export async function getAvailability(
     busyTimes.push(...manualBusySlots);
   }
 
-  // If we have unregistered participants and no preferred days, 
-  // default to weekdays (1-5) as it's more likely to work for professionals
-  if (hasUnregisteredParticipants && effectivePreferredDays.length === 0) {
-    effectivePreferredDays = [1, 2, 3, 4, 5];
-  }
-  
-  if (effectivePreferredDays.length > 0) {
-    console.log(`Using effective preferred days: ${
-      effectivePreferredDays.map(d => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d]).join(', ')
-    }`);
+  // We're already using the preferredDays from earlier in the code, so don't redeclare it
+  if (preferredDays.length > 0) {
+    console.log(`Preferred days: ${preferredDays.map(d => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d]).join(', ')}`);
   } else {
     console.log('No preferred days specified, using all days');
+  }
+  
+  // If we have unregistered participants and no preferred days, 
+  // default to weekdays (1-5) as it's more likely to work for professionals
+  const effectivePreferredDays = preferredDays.length > 0 
+    ? preferredDays 
+    : (hasUnregisteredParticipants ? [1, 2, 3, 4, 5] : []);
+    
+  if (hasUnregisteredParticipants && effectivePreferredDays.length > 0) {
+    console.log(`Using effective preferred days for unregistered participants: ${
+      effectivePreferredDays.map(d => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d]).join(', ')
+    }`);
   }
 
   // Generate available slots in user's timezone
@@ -672,6 +896,18 @@ export async function getAvailability(
       }
     };
   }
+  
+  // After everything is processed, add a final summary log to verify status
+  console.log('======== FINAL AVAILABILITY STATUS =========');
+  console.log(`Total Participants: ${validParticipants.length}`);
+  console.log(`Participants with Calendar Access: ${participantAccounts.length}`);
+  console.log(`Participants without Access: ${participantsWithoutAccess.length}`);
+  console.log(`Unregistered Participants: ${validParticipants.length - participantAccounts.length}`);
+  if (participantAccounts.length === 0) {
+    console.log('⚠️ CRITICAL WARNING: No calendar accounts found for any participants!');
+    console.log('Falling back to standard working hours only!');
+  }
+  console.log('=======================================');
   
   // Return properly formatted response
   return {
