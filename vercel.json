@@ -8,5 +8,6 @@
   ],
   "env": {
     "NEXTAUTH_URL": "${URL}"
-  }
+  },
+  "buildCommand": "npm run vercel-build"
 } 

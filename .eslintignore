@@ -1,0 +1,18 @@
+# Ignore node_modules
+node_modules
+
+# Ignore build output
+.next
+out
+
+# Ignore test files
+**/*.test.js
+**/*.test.ts
+**/*.test.tsx
+src/tests
+
+# Ignore certain files causing issues
+src/lib/calendarService copy.ts
+src/lib/openai.js
+src/tests/openaiTests.js
+src/transcribeAudio.ts 
